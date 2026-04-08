@@ -6,8 +6,18 @@ readme = "README.md"
 authors = [
     { name = "Matt Wilkie", email = "matt.wilkie@yukon.ca" }
 ]
-requires-python = ">=3.14"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "gdal==3.12.1",
+]
+
+[[tool.uv.index]]
+name = "mentaljam-gdal"
+url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/simple"
+explicit = true
+
+[tool.uv.sources]
+gdal = { index = "mentaljam-gdal" }
 
 [project.scripts]
 raster-repo = "raster_repo:main"

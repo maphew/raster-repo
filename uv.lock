@@ -1,0 +1,34 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "gdal"
+version = "3.12.1"
+source = { registry = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/simple" }
+sdist = { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/c91644f7789d73c89f8baafa4fe61cedf5182081314862c05763223ecc39070b/gdal-3.12.1.tar.gz", hash = "sha256:c91644f7789d73c89f8baafa4fe61cedf5182081314862c05763223ecc39070b" }
+wheels = [
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/ab23cb482ad18bc0386badf4e2d64cb627526e8558e13dfd2c3b0ac34b06b4ab/gdal-3.12.1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:ab23cb482ad18bc0386badf4e2d64cb627526e8558e13dfd2c3b0ac34b06b4ab" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/6933e1eb2681d76626bde56c84dc4593972929e503f88ea5851540e6bb6f32d7/gdal-3.12.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:6933e1eb2681d76626bde56c84dc4593972929e503f88ea5851540e6bb6f32d7" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/c77c9746d6bead411a1195248777eeb8b94cda404e7bc5a6e88c01ece1b3ac19/gdal-3.12.1-cp312-cp312-win_amd64.whl", hash = "sha256:c77c9746d6bead411a1195248777eeb8b94cda404e7bc5a6e88c01ece1b3ac19" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/33d8c7a02a9a07ffec289d1c8560ee68fe32abf1b10ecd59453dda648948d289/gdal-3.12.1-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:33d8c7a02a9a07ffec289d1c8560ee68fe32abf1b10ecd59453dda648948d289" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/6010f44e931709b04a7fe24704625d1e936acc6576c4fb13198da3b2078c8062/gdal-3.12.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:6010f44e931709b04a7fe24704625d1e936acc6576c4fb13198da3b2078c8062" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/01d4b70fda05fca564c4678dab2375c2a9f0497aeab069611eb9c3b54f0f959a/gdal-3.12.1-cp313-cp313-win_amd64.whl", hash = "sha256:01d4b70fda05fca564c4678dab2375c2a9f0497aeab069611eb9c3b54f0f959a" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/b6b569091ac45bba6c15ca6382559966931b27ce3f1b38c92fa7073e18af9b1d/gdal-3.12.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:b6b569091ac45bba6c15ca6382559966931b27ce3f1b38c92fa7073e18af9b1d" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/48f25b87809ff0b3ff0ce153432ae2650f3f9d555c74a515487cdc34f66f1a6a/gdal-3.12.1-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:48f25b87809ff0b3ff0ce153432ae2650f3f9d555c74a515487cdc34f66f1a6a" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/5fe701849ad4439471c95ac200df1754b67c0e6de8e1ca7c3cfa968662c717cf/gdal-3.12.1-cp314-cp314-win_amd64.whl", hash = "sha256:5fe701849ad4439471c95ac200df1754b67c0e6de8e1ca7c3cfa968662c717cf" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/db83dd02eb3190f42869ed509c3d902b91de090da86c8dc414007d02300c2326/gdal-3.12.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:db83dd02eb3190f42869ed509c3d902b91de090da86c8dc414007d02300c2326" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/bdd7e67bca8da0896b8107160fbe73802225845f5cb7976a0e556bc8173d72e6/gdal-3.12.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:bdd7e67bca8da0896b8107160fbe73802225845f5cb7976a0e556bc8173d72e6" },
+    { url = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/files/df3e901c02b5373013f9add1b64ef8d92be0cc7f79d07ff192a1b8b6c8ac4cc1/gdal-3.12.1-cp314-cp314t-win_amd64.whl", hash = "sha256:df3e901c02b5373013f9add1b64ef8d92be0cc7f79d07ff192a1b8b6c8ac4cc1" },
+]
+
+[[package]]
+name = "raster-repo"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "gdal" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "gdal", specifier = "==3.12.1", index = "https://gitlab.com/api/v4/projects/61637378/packages/pypi/simple" }]
