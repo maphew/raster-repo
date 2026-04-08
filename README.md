@@ -1,8 +1,8 @@
 # Raster Image Repository
 
-Minimal agent-friendly scaffold for incrementally inventorying a messy raster estate.
+Minimal agent-friendly scaffold for incrementally inventorying a messy raster estate Incrementally convert a large, disorganized legacy raster archive into a **consistent, cloud-friendly, queryable dataset**.
 
-Status: **Alpha** - everything subject to change.
+Status: **Alpha** - everything subject to change. Zero guarantees on usefulness or longevity.
 
 ## What this does
 
