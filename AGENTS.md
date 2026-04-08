@@ -15,7 +15,7 @@ Phase 1 only: inventory and metadata capture into SQLite.
 ## Constraints
 
 - Prefer Python and SQLite.
-- Prefer GDAL CLI over ArcPy.
+- Prefer GDAL (Python bindings or CLI) over ArcPy.
 - Do not overwrite source rasters.
 - Keep changes small and reviewable.
 - Favor idempotent scripts and append-only metadata collection.

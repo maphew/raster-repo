@@ -31,9 +31,10 @@ raster-repo/
 
 ## Prerequisites
 
-- Python 3.11+
-- GDAL installed and `gdalinfo` available on `PATH` 
-  (default on windows D:/osgeo4w)
+- Python 3.12+
+- GDAL installed (Python bindings or CLI)
+  - Python: `uv run scripts/install-py-gdal.py`
+  - CLI: ensure `gdalinfo` is on `PATH`
 
 Check:
 
