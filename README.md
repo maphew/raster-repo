@@ -33,29 +33,30 @@ raster-repo/
 
 - Python 3.12+
 - GDAL installed (Python bindings or CLI)
-  - Python: `uv run scripts/install-py-gdal.py`
+  - Python: activate venv and `uv run scripts/install-py-gdal.py`
   - CLI: ensure `gdalinfo` is on `PATH`
 
-Check:
-
-```bash
-gdalinfo --version
-python --version
-```
 
 ## Quick start
 
-Create a virtual environment and install Python dependencies:
-
 ```bash
+# Create a virtual environment and install Python dependencies:
 uv sync
-.venv/activate
-```
+.venv/Scripts/activate
 
+# install gdal binary python bindings
+uv run scripts/install-py-gdal.py
+
+# Install the main cli into the virtual environment:
+uv tool install -e .
+
+# test
+raster-repo --help
+```
 Run an inventory over one or more roots:
 
 ```bash
-python -m raster_inventory.inventory \
+raster-repo \
   --db inventory.sqlite \
   /data/raster_root_1 /data/raster_root_2
 ```
@@ -63,7 +64,7 @@ python -m raster_inventory.inventory \
 Show summary stats:
 
 ```bash
-python -m raster_inventory.inventory \
+raster-repo \
   --db inventory.sqlite \
   --summary
 ```
@@ -71,7 +72,7 @@ python -m raster_inventory.inventory \
 Rescan only files that are new or changed:
 
 ```bash
-uv run python -m raster_inventory.inventory \
+raster-repo \
   --db inventory.sqlite \
   --skip-unchanged \
   /data/raster_root
