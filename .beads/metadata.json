@@ -2,6 +2,6 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "embedded",
-  "dolt_database": "raster_repo",
-  "project_id": "4e08d41f-0a26-4873-8331-8b684d1d6017"
+  "dolt_database": "rr",
+  "project_id": "5facc740-8450-4504-bb60-4cbf848cb539"
 }
