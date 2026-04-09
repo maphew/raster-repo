@@ -149,6 +149,99 @@ def test_stac_handles_non_wgs84_inventory(scratch_dir, sample_gdal_info):
         assert actual == pytest.approx(expected)
 
 
+def test_stac_recovers_missing_transform_from_source(
+    scratch_dir, sample_gdal_info, monkeypatch
+):
+    db_path = scratch_dir / "inventory.sqlite"
+    raster_path = scratch_dir / "tiles" / "missing-transform.tif"
+    raster_path.parent.mkdir()
+    raster_path.write_text("dummy")
+
+    info = sample_gdal_info()
+    record = inventory.extract_record(raster_path, info, store_raw_json=False)
+
+    with inventory.connect_db(db_path) as conn:
+        inventory.upsert_record(conn, record)
+        conn.execute(
+            "UPDATE files SET geo_transform_json = NULL WHERE path = ?",
+            (str(raster_path),),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(
+        stac,
+        "load_runtime_metadata",
+        lambda path: info if path == raster_path else None,
+    )
+
+    output_dir = scratch_dir / "stac"
+    exit_code = stac.main(
+        [
+            "--db",
+            str(db_path),
+            "--output",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    collection_id = stac.build_collection_id(raster_path.parent)
+    item_files = list((output_dir / collection_id / "items").glob("*.json"))
+    assert len(item_files) == 1
+    item = json.loads(item_files[0].read_text())
+
+    assert item["bbox"] == [0.0, -90.0, 120.0, 0.0]
+    assert item["properties"]["proj:transform"] == [0.0, 30.0, 0.0, 0.0, 0.0, -30.0]
+
+
+def test_stac_emits_items_without_georeferencing(
+    scratch_dir, sample_gdal_info, monkeypatch
+):
+    db_path = scratch_dir / "inventory.sqlite"
+    raster_path = scratch_dir / "tiles" / "ungeoreferenced.tif"
+    raster_path.parent.mkdir()
+    raster_path.write_text("dummy")
+
+    info = sample_gdal_info()
+    info["geoTransform"] = None
+    info["cornerCoordinates"] = None
+    info["coordinateSystem"] = None
+    record = inventory.extract_record(raster_path, info, store_raw_json=False)
+
+    with inventory.connect_db(db_path) as conn:
+        inventory.upsert_record(conn, record)
+        conn.commit()
+
+    monkeypatch.setattr(stac, "load_runtime_metadata", lambda path: None)
+
+    output_dir = scratch_dir / "stac"
+    exit_code = stac.main(
+        [
+            "--db",
+            str(db_path),
+            "--output",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    collection_id = stac.build_collection_id(raster_path.parent)
+    collection = json.loads(
+        (output_dir / collection_id / "collection.json").read_text()
+    )
+    assert collection["extent"]["spatial"]["bbox"] == [[-180.0, -90.0, 180.0, 90.0]]
+
+    item_files = list((output_dir / collection_id / "items").glob("*.json"))
+    assert len(item_files) == 1
+    item = json.loads(item_files[0].read_text())
+
+    assert item["geometry"] is None
+    assert item["bbox"] is None
+    assert item["properties"]["proj:shape"] == [3, 4]
+
+
 def _project_to_wgs84(transform: Sequence[float], size: Sequence[int], epsg: int):
     sr = osr.SpatialReference()
     sr.ImportFromEPSG(epsg)

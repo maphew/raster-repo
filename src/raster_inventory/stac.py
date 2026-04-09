@@ -8,7 +8,7 @@ import json
 import re
 import sqlite3
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
@@ -20,6 +20,7 @@ from .inventory import connect_db
 STAC_VERSION = "1.0.0"
 CATALOG_DEFAULT_ID = "raster-inventory"
 CATALOG_DEFAULT_DESCRIPTION = "STAC catalog generated from raster inventory records."
+DEFAULT_SPATIAL_EXTENT = [-180.0, -90.0, 180.0, 90.0]
 _OSR_MODULE: ModuleType | None = None
 
 
@@ -203,10 +204,64 @@ def parse_transform(
     if not isinstance(data, list) or len(data) < 6:
         return None
     try:
-        numbers = tuple(float(data[i]) for i in range(6))
+        return (
+            float(data[0]),
+            float(data[1]),
+            float(data[2]),
+            float(data[3]),
+            float(data[4]),
+            float(data[5]),
+        )
     except (TypeError, ValueError):
         return None
-    return numbers  # type: ignore[return-value]
+
+
+def _encode_json(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, separators=(",", ":"))
+
+
+def load_runtime_metadata(path: Path) -> dict | None:
+    try:
+        from .inventory import run_gdalinfo
+
+        return run_gdalinfo(path)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resolve_row_metadata(row: InventoryRow) -> tuple[InventoryRow, dict | None]:
+    needs_runtime_lookup = (
+        row.geo_transform_json is None
+        or row.width is None
+        or row.height is None
+        or row.crs is None
+    )
+    if not needs_runtime_lookup:
+        return row, None
+
+    runtime_info = load_runtime_metadata(Path(row.path))
+    if runtime_info is None:
+        return row, None
+
+    size = runtime_info.get("size") or []
+    coordinate_system = runtime_info.get("coordinateSystem") or {}
+    return (
+        replace(
+            row,
+            width=row.width
+            if row.width is not None
+            else _maybe_int(size[0] if len(size) > 0 else None),
+            height=row.height
+            if row.height is not None
+            else _maybe_int(size[1] if len(size) > 1 else None),
+            crs=row.crs or _maybe_str(coordinate_system.get("wkt")),
+            geo_transform_json=row.geo_transform_json
+            or _encode_json(runtime_info.get("geoTransform")),
+        ),
+        runtime_info,
+    )
 
 
 def pixel_to_coords(
@@ -220,18 +275,43 @@ def pixel_to_coords(
     return x, y
 
 
+def _corners_from_runtime_info(
+    runtime_info: dict | None,
+) -> list[tuple[float, float]] | None:
+    if runtime_info is None:
+        return None
+    corner_coordinates = runtime_info.get("cornerCoordinates") or {}
+    ordered_keys = ("upperLeft", "upperRight", "lowerRight", "lowerLeft")
+    points: list[tuple[float, float]] = []
+    for key in ordered_keys:
+        value = corner_coordinates.get(key)
+        if not isinstance(value, list) or len(value) < 2:
+            return None
+        try:
+            points.append((float(value[0]), float(value[1])))
+        except (TypeError, ValueError):
+            return None
+    return points
+
+
 def compute_geometry(
     row: InventoryRow,
     *,
     allow_native_geometry: bool,
-) -> tuple[dict, list[float], list[float], list[float]] | None:
+    runtime_info: dict | None = None,
+) -> tuple[dict, list[float], list[float], list[float] | None] | None:
     transform = parse_transform(row.geo_transform_json)
-    if transform is None or row.width is None or row.height is None:
-        return None
+    native_transform: list[float] | None = None
+    if transform is not None and row.width is not None and row.height is not None:
+        width = int(row.width)
+        height = int(row.height)
+        native_corners = _corner_points(transform, width, height)
+        native_transform = list(transform)
+    else:
+        native_corners = _corners_from_runtime_info(runtime_info)
+        if native_corners is None:
+            return None
 
-    width = int(row.width)
-    height = int(row.height)
-    native_corners = _corner_points(transform, width, height)
     native_bbox = _bbox_from_corners(native_corners)
     wgs_corners = _reproject_corners(native_corners, row.crs)
 
@@ -243,7 +323,7 @@ def compute_geometry(
 
     wgs_polygon = _polygon_from_corners(wgs_corners)
     wgs_bbox = _bbox_from_corners(wgs_corners)
-    return wgs_polygon, wgs_bbox, native_bbox, list(transform)
+    return wgs_polygon, wgs_bbox, native_bbox, native_transform
 
 
 def _corner_points(
@@ -382,11 +462,25 @@ def generate_stac(
     skipped: list[tuple[str, str]] = []
 
     for row in rows:
+        row, runtime_info = resolve_row_metadata(row)
         geometry = compute_geometry(
             row,
             allow_native_geometry=allow_non_wgs84,
+            runtime_info=runtime_info,
         )
-        if geometry is None:
+        item_geometry: dict | None
+        bbox: list[float] | None
+        native_bbox: list[float] | None
+        native_transform: list[float] | None
+        if geometry is None and row.width is not None and row.height is not None:
+            item_geometry = None
+            bbox = None
+            native_bbox = None
+            parsed_transform = parse_transform(row.geo_transform_json)
+            native_transform = (
+                list(parsed_transform) if parsed_transform is not None else None
+            )
+        elif geometry is None:
             reason = "missing geometry"
             if row.geo_transform_json is None:
                 reason = "missing transform"
@@ -396,8 +490,9 @@ def generate_stac(
                 reason = "reprojection failed"
             skipped.append((row.path, reason))
             continue
+        else:
+            item_geometry, bbox, native_bbox, native_transform = geometry
 
-        item_geometry, bbox, native_bbox, native_transform = geometry
         parent = Path(row.path).parent
         if group_by == "single":
             if not collection_id:
@@ -425,7 +520,13 @@ def generate_stac(
         when = normalize_datetime(row.mtime_utc) or normalize_datetime(
             row.scanned_at_utc
         )
-        update_extent(extent, bbox, when)
+        if bbox is not None:
+            update_extent(extent, bbox, when)
+        elif when:
+            if extent.start is None or when < extent.start:
+                extent.start = when
+            if extent.end is None or when > extent.end:
+                extent.end = when
 
         item_id = item_identifier(Path(row.path))
         item_path = output / current_collection_id / "items" / f"{item_id}.json"
@@ -506,7 +607,15 @@ def generate_stac(
         items_dir = collection_dir / "items"
         items_dir.mkdir(exist_ok=True)
 
-        bbox = [[extent.minx, extent.miny, extent.maxx, extent.maxy]]
+        spatial_bbox = (
+            [extent.minx, extent.miny, extent.maxx, extent.maxy]
+            if extent.minx is not None
+            and extent.miny is not None
+            and extent.maxx is not None
+            and extent.maxy is not None
+            else DEFAULT_SPATIAL_EXTENT
+        )
+        collection_bbox = [spatial_bbox]
         interval = [[extent.start, extent.end]]
         collection_rel = (Path(collection_key) / "collection.json").as_posix()
         links = [
@@ -544,7 +653,7 @@ def generate_stac(
             "title": info["title"],
             "license": license_name,
             "extent": {
-                "spatial": {"bbox": bbox},
+                "spatial": {"bbox": collection_bbox},
                 "temporal": {"interval": interval},
             },
             "links": links,
