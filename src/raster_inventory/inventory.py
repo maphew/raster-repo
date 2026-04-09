@@ -6,10 +6,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 from types import ModuleType
 
 DEFAULT_EXTENSIONS = {
@@ -214,6 +215,41 @@ def run_gdalinfo(path: Path) -> dict:
     return run_gdalinfo_python(path)
 
 
+@contextmanager
+def _capture_gdal_errors(module: ModuleType) -> Iterator[list[tuple[int, str]]]:
+    push = getattr(module, "PushErrorHandler", None)
+    pop = getattr(module, "PopErrorHandler", None)
+    error_reset = getattr(module, "ErrorReset", None)
+    if push is None or pop is None or error_reset is None:
+        yield []
+        return
+
+    collected: list[tuple[int, str]] = []
+
+    def handler(err_class: int, _err_no: int, err_msg: str) -> None:
+        try:
+            severity = int(err_class)
+        except Exception:  # noqa: BLE001
+            severity = 0
+        collected.append((severity, str(err_msg)))
+
+    error_reset()
+    push(handler)
+    try:
+        yield collected
+    finally:
+        pop()
+
+
+def _raise_on_gdal_failures(module: ModuleType, errors: list[tuple[int, str]]) -> None:
+    if not errors:
+        return
+    failure_level = int(getattr(module, "CE_Failure", 3))
+    fatal_messages = [msg for severity, msg in errors if severity >= failure_level]
+    if fatal_messages:
+        raise RuntimeError("; ".join(fatal_messages))
+
+
 def run_gdalinfo_cli(path: Path) -> dict:
     result = subprocess.run(
         ["gdalinfo", "-json", str(path)],
@@ -233,11 +269,13 @@ def run_gdalinfo_cli(path: Path) -> dict:
 def run_gdalinfo_python(path: Path) -> dict:
     gdal = import_gdal()
     try:
-        output = gdal.Info(str(path), format="json")
+        with _capture_gdal_errors(gdal) as errors:
+            output = gdal.Info(str(path), format="json")
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(str(exc)) from exc
     if not output:
         raise RuntimeError("gdal.Info returned no output")
+    _raise_on_gdal_failures(gdal, errors)
     try:
         return json.loads(output)
     except json.JSONDecodeError as exc:
