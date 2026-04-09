@@ -54,9 +54,12 @@ uv run scripts/install-py-gdal.py
 # Install the main cli into the virtual environment:
 uv tool install -e .
 
-# test
+# quick CLI check
 raster-repo --help
 raster-repo view --help
+
+# python -m entrypoint
+uv run python -m raster_inventory --help
 ```
 Run an inventory over one or more roots:
 
@@ -90,6 +93,14 @@ raster-repo \
   --db inventory.sqlite \
   --skip-unchanged \
   /data/raster_root
+
+## Testing
+
+Run the pytest suite before pushing changes:
+
+```bash
+uv run pytest -v
+```
 ```
 
 ## Suggested next steps
