@@ -84,6 +84,12 @@ raster-repo view \
   --db inventory.sqlite \
   --limit 30 \
   --order mtime
+
+# include extended metadata per row
+raster-repo view \
+  --db inventory.sqlite \
+  --limit 5 \
+  --details
 ```
 
 Rescan only files that are new or changed:
@@ -92,6 +98,12 @@ Rescan only files that are new or changed:
 raster-repo \
   --db inventory.sqlite \
   --skip-unchanged \
+  /data/raster_root
+
+# wipe and rebuild the inventory before rescanning
+raster-repo \
+  --db inventory.sqlite \
+  --rebuild \
   /data/raster_root
 
 ## Testing

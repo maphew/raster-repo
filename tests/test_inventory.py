@@ -2,56 +2,13 @@ from __future__ import annotations
 
 import importlib
 import json
-import shutil
 import sqlite3
-import tempfile
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from raster_inventory import inventory
-
-
-def sample_gdal_info() -> dict:
-    data = {
-        "driverShortName": "GTiff",
-        "driverLongName": "GeoTIFF",
-        "size": [4, 3],
-        "coordinateSystem": {"wkt": "EPSG:4326"},
-        "geoTransform": [0.0, 30.0, 0.0, 0.0, 0.0, -30.0],
-        "metadata": {
-            "": {"AREA_OR_POINT": "Area"},
-            "IMAGE_STRUCTURE": {"COMPRESSION": "DEFLATE"},
-        },
-        "files": ["sample.tif", "sample.ovr"],
-        "bands": [
-            {
-                "band": 1,
-                "block": [2, 2],
-                "type": "UInt16",
-                "colorInterpretation": "Gray",
-                "metadata": {
-                    "": {
-                        "STATISTICS_MINIMUM": "1",
-                        "STATISTICS_MAXIMUM": "5",
-                        "STATISTICS_MEAN": "2.5",
-                        "STATISTICS_STDDEV": "0.5",
-                        "NBITS": "12",
-                    },
-                    "COLOR_TABLE": {"CLASS_1": "background"},
-                },
-                "overviews": [1],
-                "noDataValue": 0,
-                "colorTable": {
-                    "count": 2,
-                    "entries": [[0, 0, 0, 255], [1, 255, 255, 0]],
-                },
-                "categoryNames": ["water", "land"],
-            }
-        ],
-    }
-    # Deep copy to avoid accidental mutation between tests
-    return json.loads(json.dumps(data))
 
 
 class FakeGdal:
@@ -96,17 +53,6 @@ def reset_gdal_module():
         yield
     finally:
         inventory._GDAL_MODULE = previous
-
-
-@pytest.fixture
-def scratch_dir():
-    base = Path(__file__).parent / "tmpdata"
-    base.mkdir(exist_ok=True)
-    path = Path(tempfile.mkdtemp(prefix="inventory-", dir=base))
-    try:
-        yield path
-    finally:
-        shutil.rmtree(path, ignore_errors=True)
 
 
 def test_warnings_do_not_fail_inventory():
@@ -159,7 +105,7 @@ def test_package_main_delegates_to_inventory_main(monkeypatch):
     assert captured["argv"] == ["--flag"]
 
 
-def test_extract_record_captures_extended_attributes(scratch_dir):
+def test_extract_record_captures_extended_attributes(scratch_dir, sample_gdal_info):
     info = sample_gdal_info()
     raster_path = scratch_dir / "sample.tif"
     raster_path.write_text("dummy")
@@ -174,6 +120,13 @@ def test_extract_record_captures_extended_attributes(scratch_dir):
     assert payload.stats_min == 1.0
     assert payload.color_interp == "Gray"
     assert payload.compression == "DEFLATE"
+
+    assert payload.source_files is not None
+    assert payload.metadata_json is not None
+    assert payload.band_metadata_json is not None
+    assert payload.color_table is not None
+    assert payload.category_names is not None
+
     assert json.loads(payload.source_files) == ["sample.tif", "sample.ovr"]
     metadata = json.loads(payload.metadata_json)
     assert metadata["IMAGE_STRUCTURE"]["COMPRESSION"] == "DEFLATE"
@@ -183,7 +136,7 @@ def test_extract_record_captures_extended_attributes(scratch_dir):
     assert json.loads(payload.category_names) == ["water", "land"]
 
 
-def test_upsert_record_persists_extended_fields(scratch_dir):
+def test_upsert_record_persists_extended_fields(scratch_dir, sample_gdal_info):
     info = sample_gdal_info()
     raster_path = scratch_dir / "sample.tif"
     raster_path.write_text("dummy")
@@ -217,10 +170,78 @@ def test_upsert_record_persists_extended_fields(scratch_dir):
         assert row["stats_max"] == pytest.approx(5.0)
         assert row["stats_mean"] == pytest.approx(2.5)
         assert row["stats_stddev"] == pytest.approx(0.5)
-        assert json.loads(row["color_table"])["count"] == 2
-        assert json.loads(row["category_names"]) == ["water", "land"]
-        assert json.loads(row["source_files"]) == ["sample.tif", "sample.ovr"]
-        metadata = json.loads(row["metadata_json"])
+
+        color_table = cast(str, row["color_table"])
+        category_names = cast(str, row["category_names"])
+        source_files = cast(str, row["source_files"])
+        metadata_json = cast(str, row["metadata_json"])
+        band_metadata_json = cast(str, row["band_metadata_json"])
+
+        assert json.loads(color_table)["count"] == 2
+        assert json.loads(category_names) == ["water", "land"]
+        assert json.loads(source_files) == ["sample.tif", "sample.ovr"]
+        metadata = json.loads(metadata_json)
         assert metadata["IMAGE_STRUCTURE"]["COMPRESSION"] == "DEFLATE"
-        band_metadata = json.loads(row["band_metadata_json"])
+        band_metadata = json.loads(band_metadata_json)
         assert band_metadata[0][""]["STATISTICS_MINIMUM"] == "1"
+
+
+def test_rebuild_database_removes_existing_files(scratch_dir):
+    db_path = scratch_dir / "inventory.sqlite"
+    wal_path = Path(f"{db_path}-wal")
+    shm_path = Path(f"{db_path}-shm")
+
+    for path in (db_path, wal_path, shm_path):
+        path.write_text("temp")
+
+    inventory.rebuild_database(db_path)
+
+    assert not db_path.exists()
+    assert not wal_path.exists()
+    assert not shm_path.exists()
+
+
+def test_main_rebuild_flag_recreates_database(
+    monkeypatch, scratch_dir, sample_gdal_info
+):
+    db_path = scratch_dir / "inventory.sqlite"
+    raster_path = scratch_dir / "sample.tif"
+    raster_path.write_text("dummy")
+
+    legacy_path = scratch_dir / "legacy.tif"
+    legacy_path.write_text("legacy")
+
+    monkeypatch.setattr(inventory, "ensure_gdalinfo", lambda: None)
+
+    def fake_gdalinfo(path: Path) -> dict:
+        info = sample_gdal_info()
+        info["files"] = [str(path)]
+        info["size"] = [2, 2]
+        return info
+
+    monkeypatch.setattr(inventory, "run_gdalinfo", fake_gdalinfo)
+
+    exit_code = inventory.main(["--db", str(db_path), str(raster_path)])
+    assert exit_code == 0
+
+    with inventory.connect_db(db_path) as conn:
+        record = inventory.error_record(legacy_path, "stale")
+        inventory.upsert_record(conn, record)
+        conn.commit()
+        total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        assert total == 2
+
+    exit_code = inventory.main(
+        [
+            "--rebuild",
+            "--db",
+            str(db_path),
+            str(raster_path),
+        ]
+    )
+    assert exit_code == 0
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT path FROM files ORDER BY path").fetchall()
+        assert [row["path"] for row in rows] == [str(raster_path)]

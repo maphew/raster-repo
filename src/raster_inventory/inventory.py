@@ -195,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Store full gdalinfo JSON in the database.",
     )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Delete the existing database before scanning to force a rebuild.",
+    )
     return parser
 
 
@@ -221,14 +226,33 @@ def ensure_gdalinfo() -> None:
         ) from exc
 
 
-def connect_db(db_path: Path) -> sqlite3.Connection:
+@contextmanager
+def connect_db(db_path: Path) -> Iterator[sqlite3.Connection]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.executescript(SCHEMA_SQL)
     ensure_optional_columns(conn)
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def rebuild_database(db_path: Path) -> None:
+    """Remove an existing inventory database and WAL/SHM sidecars."""
+
+    removed: list[Path] = []
+    for suffix in ("", "-wal", "-shm"):
+        candidate = Path(f"{db_path}{suffix}")
+        if candidate.exists():
+            candidate.unlink()
+            removed.append(candidate)
+
+    if removed:
+        removed_paths = ", ".join(str(path) for path in removed)
+        print(f"[rebuild] deleted {removed_paths}")
 
 
 def ensure_optional_columns(conn: sqlite3.Connection) -> None:
@@ -789,6 +813,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.summary and args.rebuild:
+        parser.error("--rebuild cannot be combined with --summary")
+
     if args.summary:
         with connect_db(args.db) as conn:
             print_summary(conn)
@@ -796,6 +823,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.roots:
         parser.error("roots are required unless --summary is used")
+
+    if args.rebuild:
+        rebuild_database(args.db)
 
     ensure_gdalinfo()
     extensions = normalize_extensions(args.extensions)

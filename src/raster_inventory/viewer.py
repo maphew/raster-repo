@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sqlite3
 import subprocess
@@ -14,6 +15,38 @@ STATUS_COLORS: dict[str, str] = {
     "ok": "\x1b[32m",  # green
     "error": "\x1b[31m",  # red
 }
+
+
+VIEW_COLUMNS = (
+    "path",
+    "mtime_utc",
+    "dtype",
+    "bands",
+    "width",
+    "height",
+    "size_bytes",
+    "scan_status",
+    "scanned_at_utc",
+    "pixel_width",
+    "pixel_height",
+    "block_width",
+    "block_height",
+    "bits",
+    "stats_min",
+    "stats_max",
+    "stats_mean",
+    "stats_stddev",
+    "compression",
+    "color_interp",
+    "color_table",
+    "category_names",
+    "metadata_json",
+    "band_metadata_json",
+    "source_files",
+    "overview_count",
+    "is_cog",
+    "has_overviews",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pipe the output through less -R (when available).",
     )
+    parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Show extended metadata for each row.",
+    )
     return parser
 
 
@@ -88,11 +126,8 @@ def fetch_rows(
         "size": "size_bytes DESC",
     }[order]
 
-    sql = [
-        "SELECT path, mtime_utc, dtype, bands, width, height, size_bytes, scan_status,",
-        "       scanned_at_utc",
-        "  FROM files",
-    ]
+    columns = ", ".join(VIEW_COLUMNS)
+    sql = [f"SELECT {columns}", "  FROM files"]
     if clauses:
         sql.append(" WHERE " + " AND ".join(clauses))
     sql.append(f" ORDER BY {order_by}")
@@ -104,7 +139,9 @@ def fetch_rows(
     return list(cursor.fetchall())
 
 
-def format_rows(rows: list[sqlite3.Row], *, color_enabled: bool) -> str:
+def format_rows(
+    rows: list[sqlite3.Row], *, color_enabled: bool, details: bool = False
+) -> str:
     if not rows:
         return "No records found in the inventory."
 
@@ -164,6 +201,9 @@ def format_rows(rows: list[sqlite3.Row], *, color_enabled: bool) -> str:
         )
         lines.append(line)
 
+        if details:
+            lines.extend(format_detail_lines(row))
+
     return "\n".join(lines)
 
 
@@ -203,6 +243,87 @@ def format_dimensions(
     except (TypeError, ValueError):
         return "-"
     return f"{w:,}x{h:,}"
+
+
+def format_float_value(value: float | int | str | None) -> str:
+    if value is None:
+        return "-"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    text = f"{number:.6f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def format_bool_flag(value: float | int | str | None) -> str:
+    if value is None:
+        return "?"
+    try:
+        return "yes" if int(value) else "no"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def format_json_preview(
+    value: str | bytes | None, *, max_length: int = 200
+) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace").strip()
+    else:
+        text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        formatted = text
+    else:
+        formatted = json.dumps(parsed, separators=(",", ":"))
+    if len(formatted) > max_length:
+        return f"{formatted[: max_length - 3]}..."
+    return formatted
+
+
+def format_detail_lines(row: sqlite3.Row) -> list[str]:
+    indent = " " * 4
+    px_text = f"{format_float_value(row['pixel_width'])}x{format_float_value(row['pixel_height'])}"
+    block_text = f"{format_int(row['block_width'])}x{format_int(row['block_height'])}"
+    first_line = (
+        f"{indent}px:{px_text}"
+        f"  block:{block_text}"
+        f"  bits:{format_int(row['bits'])}"
+        f"  dtype:{format_type(row['dtype'])}"
+        f"  compression:{row['compression'] or '-'}"
+        f"  color:{row['color_interp'] or '-'}"
+        f"  cog:{format_bool_flag(row['is_cog'])}"
+        f"  overviews:{format_int(row['overview_count'])}"
+        f"  has_overviews:{format_bool_flag(row['has_overviews'])}"
+    )
+
+    stats_line = (
+        f"{indent}stats min={format_float_value(row['stats_min'])}"
+        f" max={format_float_value(row['stats_max'])}"
+        f" mean={format_float_value(row['stats_mean'])}"
+        f" std={format_float_value(row['stats_stddev'])}"
+    )
+
+    lines = [first_line.rstrip(), stats_line.rstrip()]
+
+    for label, key in (
+        ("metadata", "metadata_json"),
+        ("band_metadata", "band_metadata_json"),
+        ("color_table", "color_table"),
+        ("category_names", "category_names"),
+        ("source_files", "source_files"),
+    ):
+        preview = format_json_preview(row[key])
+        if preview:
+            lines.append(f"{indent}{label}: {preview}")
+
+    return lines
 
 
 def dtype_bits(dtype: str) -> str:
@@ -257,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             order=args.order,
         )
 
-    output = format_rows(rows, color_enabled=color_enabled)
+    output = format_rows(rows, color_enabled=color_enabled, details=args.details)
     emit_output(output, use_pager=args.pager)
     return 0
 
