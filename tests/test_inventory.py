@@ -126,6 +126,7 @@ def test_extract_record_captures_extended_attributes(scratch_dir, sample_gdal_in
     assert payload.band_metadata_json is not None
     assert payload.color_table is not None
     assert payload.category_names is not None
+    assert payload.geo_transform_json is not None
 
     assert json.loads(payload.source_files) == ["sample.tif", "sample.ovr"]
     metadata = json.loads(payload.metadata_json)
@@ -134,6 +135,9 @@ def test_extract_record_captures_extended_attributes(scratch_dir, sample_gdal_in
     assert band_metadata[0][""]["STATISTICS_MAXIMUM"] == "5"
     assert json.loads(payload.color_table)["count"] == 2
     assert json.loads(payload.category_names) == ["water", "land"]
+    transform = json.loads(payload.geo_transform_json)
+    assert transform[1] == 30.0
+    assert transform[5] == -30.0
 
 
 def test_upsert_record_persists_extended_fields(scratch_dir, sample_gdal_info):
@@ -152,8 +156,8 @@ def test_upsert_record_persists_extended_fields(scratch_dir, sample_gdal_info):
             """
             SELECT compression, pixel_width, pixel_height, block_width, block_height,
                    bits, stats_min, stats_max, stats_mean, stats_stddev,
-                   color_table, category_names, metadata_json, band_metadata_json,
-                   source_files
+                    color_table, category_names, metadata_json, band_metadata_json,
+                    geo_transform_json, source_files
               FROM files
              WHERE path = ?
             """,
@@ -176,6 +180,7 @@ def test_upsert_record_persists_extended_fields(scratch_dir, sample_gdal_info):
         source_files = cast(str, row["source_files"])
         metadata_json = cast(str, row["metadata_json"])
         band_metadata_json = cast(str, row["band_metadata_json"])
+        geo_transform_json = cast(str, row["geo_transform_json"])
 
         assert json.loads(color_table)["count"] == 2
         assert json.loads(category_names) == ["water", "land"]
@@ -184,6 +189,9 @@ def test_upsert_record_persists_extended_fields(scratch_dir, sample_gdal_info):
         assert metadata["IMAGE_STRUCTURE"]["COMPRESSION"] == "DEFLATE"
         band_metadata = json.loads(band_metadata_json)
         assert band_metadata[0][""]["STATISTICS_MINIMUM"] == "1"
+        transform = json.loads(geo_transform_json)
+        assert transform[0] == 0.0
+        assert transform[3] == 0.0
 
 
 def test_rebuild_database_removes_existing_files(scratch_dir):

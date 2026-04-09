@@ -90,6 +90,16 @@ raster-repo view \
   --db inventory.sqlite \
   --limit 5 \
   --details
+
+Generate STAC collections and items for inventoried rasters:
+
+```bash
+raster-repo stac \
+  --db inventory.sqlite \
+  --output stac-output
+```
+
+The STAC generator now reprojects every footprint to WGS84 automatically (using GDAL/OSR) so rasters stored in regional projections like EPSG:3578/3579 (Yukon Albers) are emitted without manual intervention. If a dataset has an unknown CRS, you can still force native coordinates with `--allow-non-wgs84`, but the default pipeline keeps the STAC catalog compliant.
 ```
 
 Rescan only files that are new or changed:

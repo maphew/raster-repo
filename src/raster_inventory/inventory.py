@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS files (
     category_names TEXT,
     metadata_json TEXT,
     band_metadata_json TEXT,
+    geo_transform_json TEXT,
     source_files TEXT,
     overview_count INTEGER,
     is_cog INTEGER,
@@ -90,6 +91,7 @@ FILE_OPTIONAL_COLUMNS: dict[str, str] = {
     "category_names": "TEXT",
     "metadata_json": "TEXT",
     "band_metadata_json": "TEXT",
+    "geo_transform_json": "TEXT",
     "source_files": "TEXT",
     "overview_count": "INTEGER",
 }
@@ -123,6 +125,7 @@ class FileRecord:
     category_names: str | None
     metadata_json: str | None
     band_metadata_json: str | None
+    geo_transform_json: str | None
     source_files: str | None
     overview_count: int | None
     is_cog: int | None
@@ -580,6 +583,7 @@ def extract_record(path: Path, info: dict, store_raw_json: bool) -> FileRecord:
     category_names = first_band_category_names(info)
     metadata_json = json.dumps(dataset_metadata(info), separators=(",", ":"))
     band_metadata_json = json.dumps(band_metadata_list(info), separators=(",", ":"))
+    geo_transform_json = encode_json(info.get("geoTransform"))
     source_files = dataset_source_files(info)
     overview_count = first_band_overview_count(info)
     first_band = _first_band(info)
@@ -615,6 +619,7 @@ def extract_record(path: Path, info: dict, store_raw_json: bool) -> FileRecord:
         category_names=category_names,
         metadata_json=metadata_json,
         band_metadata_json=band_metadata_json,
+        geo_transform_json=geo_transform_json,
         source_files=source_files,
         overview_count=overview_count,
         is_cog=is_cog(info),
@@ -655,6 +660,7 @@ def error_record(path: Path, error: str) -> FileRecord:
         category_names=None,
         metadata_json=None,
         band_metadata_json=None,
+        geo_transform_json=None,
         source_files=None,
         overview_count=None,
         is_cog=None,
@@ -667,94 +673,56 @@ def error_record(path: Path, error: str) -> FileRecord:
 
 
 def upsert_record(conn: sqlite3.Connection, record: FileRecord) -> None:
+    columns = (
+        "path",
+        "size_bytes",
+        "mtime_utc",
+        "format",
+        "driver",
+        "crs",
+        "width",
+        "height",
+        "bands",
+        "dtype",
+        "nodata",
+        "pixel_width",
+        "pixel_height",
+        "block_width",
+        "block_height",
+        "bits",
+        "stats_min",
+        "stats_max",
+        "stats_mean",
+        "stats_stddev",
+        "compression",
+        "color_interp",
+        "color_table",
+        "category_names",
+        "metadata_json",
+        "band_metadata_json",
+        "geo_transform_json",
+        "source_files",
+        "overview_count",
+        "is_cog",
+        "has_overviews",
+        "raw_json",
+        "scan_status",
+        "error_message",
+        "scanned_at_utc",
+    )
+    values = tuple(getattr(record, column) for column in columns)
+    mutable_columns = [column for column in columns if column != "path"]
+    column_list = ", ".join(columns)
+    placeholders = ", ".join(["?"] * len(columns))
+    updates = ", ".join(f"{column} = excluded.{column}" for column in mutable_columns)
     conn.execute(
-        """
-        INSERT INTO files (
-            path, size_bytes, mtime_utc, format, driver, crs, width, height,
-            bands, dtype, nodata, pixel_width, pixel_height, block_width,
-            block_height, bits, stats_min, stats_max, stats_mean, stats_stddev,
-            compression, color_interp, color_table, category_names,
-            metadata_json, band_metadata_json, source_files, overview_count,
-            is_cog, has_overviews, raw_json, scan_status, error_message,
-            scanned_at_utc
-        ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?
-        )
+        f"""
+        INSERT INTO files ({column_list})
+        VALUES ({placeholders})
         ON CONFLICT(path) DO UPDATE SET
-            size_bytes = excluded.size_bytes,
-            mtime_utc = excluded.mtime_utc,
-            format = excluded.format,
-            driver = excluded.driver,
-            crs = excluded.crs,
-            width = excluded.width,
-            height = excluded.height,
-            bands = excluded.bands,
-            dtype = excluded.dtype,
-            nodata = excluded.nodata,
-            pixel_width = excluded.pixel_width,
-            pixel_height = excluded.pixel_height,
-            block_width = excluded.block_width,
-            block_height = excluded.block_height,
-            bits = excluded.bits,
-            stats_min = excluded.stats_min,
-            stats_max = excluded.stats_max,
-            stats_mean = excluded.stats_mean,
-            stats_stddev = excluded.stats_stddev,
-            compression = excluded.compression,
-            color_interp = excluded.color_interp,
-            color_table = excluded.color_table,
-            category_names = excluded.category_names,
-            metadata_json = excluded.metadata_json,
-            band_metadata_json = excluded.band_metadata_json,
-            source_files = excluded.source_files,
-            overview_count = excluded.overview_count,
-            is_cog = excluded.is_cog,
-            has_overviews = excluded.has_overviews,
-            raw_json = excluded.raw_json,
-            scan_status = excluded.scan_status,
-            error_message = excluded.error_message,
-            scanned_at_utc = excluded.scanned_at_utc
+            {updates}
         """,
-        (
-            record.path,
-            record.size_bytes,
-            record.mtime_utc,
-            record.format,
-            record.driver,
-            record.crs,
-            record.width,
-            record.height,
-            record.bands,
-            record.dtype,
-            record.nodata,
-            record.pixel_width,
-            record.pixel_height,
-            record.block_width,
-            record.block_height,
-            record.bits,
-            record.stats_min,
-            record.stats_max,
-            record.stats_mean,
-            record.stats_stddev,
-            record.compression,
-            record.color_interp,
-            record.color_table,
-            record.category_names,
-            record.metadata_json,
-            record.band_metadata_json,
-            record.source_files,
-            record.overview_count,
-            record.is_cog,
-            record.has_overviews,
-            record.raw_json,
-            record.scan_status,
-            record.error_message,
-            record.scanned_at_utc,
-        ),
+        values,
     )
 
 
