@@ -15,8 +15,8 @@ class FakeGdal:
     CE_Failure = 3
     CE_Fatal = 4
 
-    def __init__(self, output: dict, errors: list[tuple[int, str]]):
-        self._output = json.dumps(output)
+    def __init__(self, output, errors: list[tuple[int, str]]):
+        self._output = output
         self._errors = errors
         self._handler = None
         self.push_count = 0
@@ -36,7 +36,7 @@ class FakeGdal:
     def ErrorReset(self) -> None:
         pass
 
-    def Info(self, path: str, format: str = "json") -> str:  # noqa: A003 - matches GDAL API
+    def Info(self, path: str, format: str = "json"):
         if self._handler is not None:
             for severity, message in self._errors:
                 self._handler(severity, 0, message)
@@ -49,7 +49,7 @@ class RunGdalInfoPythonTests(unittest.TestCase):
 
     def test_warnings_do_not_fail_inventory(self) -> None:
         fake_gdal = FakeGdal(
-            output={"driverShortName": "GTiff"},
+            output=json.dumps({"driverShortName": "GTiff"}),
             errors=[(FakeGdal.CE_Warning, "metadata mismatch")],
         )
         inventory._GDAL_MODULE = fake_gdal
@@ -62,7 +62,8 @@ class RunGdalInfoPythonTests(unittest.TestCase):
 
     def test_failures_raise_runtime_error(self) -> None:
         fake_gdal = FakeGdal(
-            output={}, errors=[(FakeGdal.CE_Failure, "could not open")]
+            output=json.dumps({}),
+            errors=[(FakeGdal.CE_Failure, "could not open")],
         )
         inventory._GDAL_MODULE = fake_gdal
 
@@ -70,6 +71,14 @@ class RunGdalInfoPythonTests(unittest.TestCase):
             inventory.run_gdalinfo_python(Path("dummy.tif"))
 
         self.assertIn("could not open", str(exc.exception))
+
+    def test_python_info_accepts_dict_output(self) -> None:
+        fake_gdal = FakeGdal(output={"driverShortName": "GTiff"}, errors=[])
+        inventory._GDAL_MODULE = fake_gdal
+
+        info = inventory.run_gdalinfo_python(Path("dummy.tif"))
+
+        self.assertEqual(info["driverShortName"], "GTiff")
 
 
 class PackageMainTests(unittest.TestCase):

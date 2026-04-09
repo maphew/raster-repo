@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
 from types import ModuleType
 
 DEFAULT_EXTENSIONS = {
@@ -276,10 +276,22 @@ def run_gdalinfo_python(path: Path) -> dict:
     if not output:
         raise RuntimeError("gdal.Info returned no output")
     _raise_on_gdal_failures(gdal, errors)
-    try:
-        return json.loads(output)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON from gdal.Info: {exc}") from exc
+    return _coerce_gdal_output(output)
+
+
+def _coerce_gdal_output(output: Any) -> dict:
+    if isinstance(output, dict):
+        return output
+    if isinstance(output, (bytes, bytearray)):
+        output = output.decode("utf-8", errors="replace")
+    if isinstance(output, str):
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON from gdal.Info: {exc}") from exc
+    raise RuntimeError(
+        f"Unexpected output type from gdal.Info: {type(output).__name__}"
+    )
 
 
 def first_band_type(info: dict) -> str | None:
