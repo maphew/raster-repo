@@ -35,6 +35,7 @@ raster-repo/
 - GDAL installed (Python bindings or CLI)
   - Python: activate venv and `uv run scripts/install-py-gdal.py`
   - CLI: ensure `gdalinfo` is on `PATH`
+  - The CLI falls back to the Python bindings when `gdalinfo` is missing.
 
 
 ## Quick start

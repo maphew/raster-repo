@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
+from types import ModuleType
 
 DEFAULT_EXTENSIONS = {
     ".tif",
@@ -76,6 +77,21 @@ class FileRecord:
     scanned_at_utc: str
 
 
+_GDAL_MODULE: ModuleType | None = None
+
+
+def import_gdal() -> ModuleType:
+    """Import and cache the GDAL Python module."""
+
+    global _GDAL_MODULE
+    if _GDAL_MODULE is None:
+        from osgeo import gdal as module  # type: ignore[import-not-found]
+
+        module.UseExceptions()
+        _GDAL_MODULE = module
+    return _GDAL_MODULE
+
+
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
@@ -139,10 +155,14 @@ def normalize_extensions(values: Iterable[str]) -> set[str]:
 
 
 def ensure_gdalinfo() -> None:
-    if shutil.which("gdalinfo") is None:
+    if shutil.which("gdalinfo") is not None:
+        return
+    try:
+        import_gdal()
+    except ModuleNotFoundError as exc:
         raise SystemExit(
-            "gdalinfo was not found on PATH. Install GDAL and ensure gdalinfo is available."
-        )
+            "gdalinfo was not found on PATH and GDAL Python bindings are unavailable."
+        ) from exc
 
 
 def connect_db(db_path: Path) -> sqlite3.Connection:
@@ -168,7 +188,9 @@ def iter_candidate_files(roots: Iterable[Path], extensions: set[str]) -> Iterabl
                 yield path
 
 
-def get_existing_signature(conn: sqlite3.Connection, path: str) -> tuple[int, str] | None:
+def get_existing_signature(
+    conn: sqlite3.Connection, path: str
+) -> tuple[int, str] | None:
     row = conn.execute(
         "SELECT size_bytes, mtime_utc FROM files WHERE path = ?",
         (path,),
@@ -180,11 +202,19 @@ def get_existing_signature(conn: sqlite3.Connection, path: str) -> tuple[int, st
 
 def path_signature(path: Path) -> tuple[int, str]:
     stat = path.stat()
-    mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC).replace(microsecond=0).isoformat()
+    mtime = (
+        datetime.fromtimestamp(stat.st_mtime, tz=UTC).replace(microsecond=0).isoformat()
+    )
     return stat.st_size, mtime
 
 
 def run_gdalinfo(path: Path) -> dict:
+    if shutil.which("gdalinfo") is not None:
+        return run_gdalinfo_cli(path)
+    return run_gdalinfo_python(path)
+
+
+def run_gdalinfo_cli(path: Path) -> dict:
     result = subprocess.run(
         ["gdalinfo", "-json", str(path)],
         capture_output=True,
@@ -198,6 +228,20 @@ def run_gdalinfo(path: Path) -> dict:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid JSON from gdalinfo: {exc}") from exc
+
+
+def run_gdalinfo_python(path: Path) -> dict:
+    gdal = import_gdal()
+    try:
+        output = gdal.Info(str(path), format="json")
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(str(exc)) from exc
+    if not output:
+        raise RuntimeError("gdal.Info returned no output")
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid JSON from gdal.Info: {exc}") from exc
 
 
 def first_band_type(info: dict) -> str | None:
