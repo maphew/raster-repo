@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import shutil
 import sqlite3
@@ -18,6 +19,7 @@ STATUS_COLORS: dict[str, str] = {
 
 
 VIEW_COLUMNS = (
+    "id",
     "path",
     "mtime_utc",
     "dtype",
@@ -47,6 +49,14 @@ VIEW_COLUMNS = (
     "is_cog",
     "has_overviews",
 )
+
+VIEW_SELECT = ", ".join(VIEW_COLUMNS)
+
+
+def _path_basename(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return Path(str(value)).name
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show extended metadata for each row.",
     )
+    parser.add_argument(
+        "identifier",
+        nargs="?",
+        help="Record id or file name to display.",
+    )
     return parser
 
 
@@ -126,8 +141,7 @@ def fetch_rows(
         "size": "size_bytes DESC",
     }[order]
 
-    columns = ", ".join(VIEW_COLUMNS)
-    sql = [f"SELECT {columns}", "  FROM files"]
+    sql = [f"SELECT {VIEW_SELECT}", "  FROM files"]
     if clauses:
         sql.append(" WHERE " + " AND ".join(clauses))
     sql.append(f" ORDER BY {order_by}")
@@ -137,6 +151,98 @@ def fetch_rows(
 
     cursor = conn.execute("".join(sql), params)
     return list(cursor.fetchall())
+
+
+def lookup_rows_by_identifier(
+    conn: sqlite3.Connection, identifier: str
+) -> list[sqlite3.Row]:
+    conn.row_factory = sqlite3.Row
+    value = (identifier or "").strip()
+    if not value:
+        return []
+
+    try:
+        record_id = int(value)
+    except ValueError:
+        pass
+    else:
+        row = conn.execute(
+            f"SELECT {VIEW_SELECT} FROM files WHERE id = ?",
+            (record_id,),
+        ).fetchone()
+        if row:
+            return [row]
+
+    lowered = value.lower()
+
+    row = conn.execute(
+        f"SELECT {VIEW_SELECT} FROM files WHERE LOWER(path) = ?",
+        (lowered,),
+    ).fetchone()
+    if row:
+        return [row]
+
+    conn.create_function("path_basename", 1, _path_basename)
+    rows = conn.execute(
+        f"SELECT {VIEW_SELECT} FROM files WHERE LOWER(path_basename(path)) = ?",
+        (lowered,),
+    ).fetchall()
+    return list(rows)
+
+
+def suggest_similar_names(
+    conn: sqlite3.Connection, identifier: str, *, limit: int = 5
+) -> list[tuple[int, str]]:
+    conn.row_factory = sqlite3.Row
+    trimmed = (identifier or "").strip()
+    if not trimmed:
+        return []
+
+    cursor = conn.execute("SELECT id, path FROM files")
+    choices: list[tuple[int, str, str]] = []
+    for row in cursor.fetchall():
+        name = Path(str(row["path"]))
+        base = name.name
+        if not base:
+            continue
+        choices.append((int(row["id"]), base, base.lower()))
+
+    if not choices:
+        return []
+
+    matches = difflib.get_close_matches(
+        trimmed.lower(),
+        [item[2] for item in choices],
+        n=limit,
+        cutoff=0.3,
+    )
+
+    suggestions: list[tuple[int, str]] = []
+    for match in matches:
+        for row_id, name, lowered in choices:
+            if lowered == match:
+                suggestions.append((row_id, name))
+                break
+    return suggestions
+
+
+def format_missing_message(identifier: str, suggestions: list[tuple[int, str]]) -> str:
+    lines = [f"No record found for '{identifier}'."]
+    if suggestions:
+        lines.append("Did you mean:")
+        for row_id, name in suggestions:
+            lines.append(f"  - {name} (id={row_id})")
+    return "\n".join(lines)
+
+
+def format_multiple_match_message(identifier: str, rows: list[sqlite3.Row]) -> str:
+    lines = [
+        f"Multiple records match '{identifier}'.",
+        "Specify an id to select one of:",
+    ]
+    for row in rows:
+        lines.append(f"  - id={row['id']} path={row['path']}")
+    return "\n".join(lines)
 
 
 def format_rows(
@@ -370,15 +476,30 @@ def main(argv: list[str] | None = None) -> int:
     color_enabled = (not args.no_color) and (sys.stdout.isatty() or args.pager)
 
     with connect_db(args.db) as conn:
-        rows = fetch_rows(
-            conn,
-            limit=args.limit,
-            status=args.status,
-            search=args.search,
-            order=args.order,
-        )
-
-    output = format_rows(rows, color_enabled=color_enabled, details=args.details)
+        if args.identifier:
+            matches = lookup_rows_by_identifier(conn, args.identifier)
+            if len(matches) == 1:
+                output = format_rows(
+                    matches,
+                    color_enabled=color_enabled,
+                    details=True,
+                )
+            elif matches:
+                output = format_multiple_match_message(args.identifier, matches)
+            else:
+                suggestions = suggest_similar_names(conn, args.identifier)
+                output = format_missing_message(args.identifier, suggestions)
+        else:
+            rows = fetch_rows(
+                conn,
+                limit=args.limit,
+                status=args.status,
+                search=args.search,
+                order=args.order,
+            )
+            output = format_rows(
+                rows, color_enabled=color_enabled, details=args.details
+            )
     emit_output(output, use_pager=args.pager)
     return 0
 
