@@ -1,51 +1,6 @@
-# Project guidance for Agents
+# Project Instructions for AI Agents
 
-## Objective
-
-Help incrementally normalize a large, messy raster estate toward:
-
-- COG or COG-like storage
-- STAC exposure
-- repeatable, low-risk daily progress
-
-## Current phase
-
-Phase 1 only: inventory and metadata capture into SQLite.
-
-## Constraints
-
-- Prefer Python and SQLite.
-- Prefer GDAL (Python bindings or CLI) over ArcPy.
-- Do not overwrite source rasters.
-- Keep changes small and reviewable.
-- Favor idempotent scripts and append-only metadata collection.
-- Avoid premature architecture.
-
-## When editing code
-
-- Keep dependencies minimal.
-- Add docstrings where they clarify behavior.
-- Keep CLI flags explicit rather than clever.
-- Prefer standard library unless a small dependency materially improves clarity.
-- Preserve backward-compatible database migrations when possible.
-
-## Near-term roadmap
-
-1. inventory rasters into SQLite
-2. add issue/triage detection
-3. create processing queue
-4. add conversion/validation pipeline
-5. generate STAC items and collections
-
-## Validation
-
-For code changes, prefer running:
-
-```bash
-uv run python -m raster_inventory.inventory --help
-```
-
-If a test suite is added later, run it before finishing.
+This file provides instructions and context for AI coding agents working on this project.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
@@ -93,3 +48,22 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+
+## Build & Test
+
+_Add your build and test commands here_
+
+```bash
+# Example:
+# npm install
+# npm test
+```
+
+## Architecture Overview
+
+_Add a brief overview of your project architecture_
+
+## Conventions & Patterns
+
+_Add your project-specific conventions here_
