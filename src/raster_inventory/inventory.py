@@ -44,6 +44,23 @@ CREATE TABLE IF NOT EXISTS files (
     bands INTEGER,
     dtype TEXT,
     nodata TEXT,
+    pixel_width REAL,
+    pixel_height REAL,
+    block_width INTEGER,
+    block_height INTEGER,
+    bits INTEGER,
+    stats_min REAL,
+    stats_max REAL,
+    stats_mean REAL,
+    stats_stddev REAL,
+    compression TEXT,
+    color_interp TEXT,
+    color_table TEXT,
+    category_names TEXT,
+    metadata_json TEXT,
+    band_metadata_json TEXT,
+    source_files TEXT,
+    overview_count INTEGER,
     is_cog INTEGER,
     has_overviews INTEGER,
     raw_json TEXT,
@@ -55,6 +72,27 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE INDEX IF NOT EXISTS idx_files_scan_status ON files(scan_status);
 CREATE INDEX IF NOT EXISTS idx_files_is_cog ON files(is_cog);
 """
+
+
+FILE_OPTIONAL_COLUMNS: dict[str, str] = {
+    "pixel_width": "REAL",
+    "pixel_height": "REAL",
+    "block_width": "INTEGER",
+    "block_height": "INTEGER",
+    "bits": "INTEGER",
+    "stats_min": "REAL",
+    "stats_max": "REAL",
+    "stats_mean": "REAL",
+    "stats_stddev": "REAL",
+    "compression": "TEXT",
+    "color_interp": "TEXT",
+    "color_table": "TEXT",
+    "category_names": "TEXT",
+    "metadata_json": "TEXT",
+    "band_metadata_json": "TEXT",
+    "source_files": "TEXT",
+    "overview_count": "INTEGER",
+}
 
 
 @dataclass(slots=True)
@@ -70,6 +108,23 @@ class FileRecord:
     bands: int | None
     dtype: str | None
     nodata: str | None
+    pixel_width: float | None
+    pixel_height: float | None
+    block_width: int | None
+    block_height: int | None
+    bits: int | None
+    stats_min: float | None
+    stats_max: float | None
+    stats_mean: float | None
+    stats_stddev: float | None
+    compression: str | None
+    color_interp: str | None
+    color_table: str | None
+    category_names: str | None
+    metadata_json: str | None
+    band_metadata_json: str | None
+    source_files: str | None
+    overview_count: int | None
     is_cog: int | None
     has_overviews: int | None
     raw_json: str | None
@@ -172,7 +227,16 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.executescript(SCHEMA_SQL)
+    ensure_optional_columns(conn)
     return conn
+
+
+def ensure_optional_columns(conn: sqlite3.Connection) -> None:
+    cursor = conn.execute("PRAGMA table_info(files)")
+    existing = {row[1] for row in cursor.fetchall()}
+    for column, column_type in FILE_OPTIONAL_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE files ADD COLUMN {column} {column_type};")
 
 
 def iter_candidate_files(roots: Iterable[Path], extensions: set[str]) -> Iterable[Path]:
@@ -294,19 +358,25 @@ def _coerce_gdal_output(output: Any) -> dict:
     )
 
 
-def first_band_type(info: dict) -> str | None:
+def _first_band(info: dict) -> dict | None:
     bands = info.get("bands") or []
     if not bands:
         return None
-    value = bands[0].get("type")
+    return bands[0]
+
+
+def first_band_type(info: dict) -> str | None:
+    band = _first_band(info)
+    if not band:
+        return None
+    value = band.get("type")
     return str(value) if value is not None else None
 
 
 def first_band_nodata(info: dict) -> str | None:
-    bands = info.get("bands") or []
-    if not bands:
+    band = _first_band(info)
+    if not band:
         return None
-    band = bands[0]
     if "noDataValue" not in band:
         return None
     return str(band["noDataValue"])
@@ -330,6 +400,145 @@ def is_cog(info: dict) -> int | None:
     return 0 if driver_short is not None else None
 
 
+def parse_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def dataset_metadata(info: dict) -> dict:
+    metadata = info.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def band_metadata_list(info: dict) -> list[dict]:
+    bands = info.get("bands") or []
+    records: list[dict] = []
+    for band in bands:
+        metadata = band.get("metadata")
+        records.append(metadata if isinstance(metadata, dict) else {})
+    return records
+
+
+def dataset_compression(info: dict) -> str | None:
+    metadata = dataset_metadata(info)
+    image_structure = metadata.get("IMAGE_STRUCTURE")
+    if isinstance(image_structure, dict):
+        value = image_structure.get("COMPRESSION")
+        if value is not None:
+            return str(value)
+    band = _first_band(info)
+    if not band:
+        return None
+    band_meta = band.get("metadata") or {}
+    band_image_structure = band_meta.get("IMAGE_STRUCTURE")
+    if isinstance(band_image_structure, dict):
+        value = band_image_structure.get("COMPRESSION")
+        if value is not None:
+            return str(value)
+    return None
+
+
+def pixel_size(info: dict) -> tuple[float | None, float | None]:
+    transform = info.get("geoTransform") or []
+    pixel_width = parse_float(transform[1]) if len(transform) > 1 else None
+    pixel_height = parse_float(transform[5]) if len(transform) > 5 else None
+    return pixel_width, pixel_height
+
+
+def first_band_block(info: dict) -> tuple[int | None, int | None]:
+    band = _first_band(info)
+    if not band:
+        return None, None
+    block = band.get("block") or []
+    block_width = parse_int(block[0]) if len(block) > 0 else None
+    block_height = parse_int(block[1]) if len(block) > 1 else None
+    return block_width, block_height
+
+
+def first_band_bits(info: dict) -> int | None:
+    band = _first_band(info)
+    if not band:
+        return None
+    metadata = band.get("metadata") or {}
+    default_domain = metadata.get("") or {}
+    bits = parse_int(default_domain.get("NBITS"))
+    if bits is not None:
+        return bits
+    dtype = first_band_type(info)
+    if dtype:
+        digits = "".join(ch for ch in dtype if ch.isdigit())
+        number = parse_int(digits) if digits else None
+        if number is not None:
+            return number
+        if dtype.lower() == "byte":
+            return 8
+    return None
+
+
+def first_band_stats(
+    info: dict,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    band = _first_band(info)
+    if not band:
+        return None, None, None, None
+    metadata = band.get("metadata") or {}
+    default_domain = metadata.get("") or {}
+    return (
+        parse_float(default_domain.get("STATISTICS_MINIMUM")),
+        parse_float(default_domain.get("STATISTICS_MAXIMUM")),
+        parse_float(default_domain.get("STATISTICS_MEAN")),
+        parse_float(default_domain.get("STATISTICS_STDDEV")),
+    )
+
+
+def encode_json(value: Any) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, separators=(",", ":"))
+
+
+def first_band_color_table(info: dict) -> str | None:
+    band = _first_band(info)
+    if not band:
+        return None
+    return encode_json(band.get("colorTable"))
+
+
+def first_band_category_names(info: dict) -> str | None:
+    band = _first_band(info)
+    if not band:
+        return None
+    return encode_json(band.get("categoryNames"))
+
+
+def first_band_overview_count(info: dict) -> int | None:
+    band = _first_band(info)
+    if not band:
+        return None
+    overviews = band.get("overviews") or []
+    return len(overviews) if overviews else 0
+
+
+def dataset_source_files(info: dict) -> str | None:
+    files = info.get("files")
+    if files is None:
+        return None
+    return encode_json(files)
+
+
 def extract_record(path: Path, info: dict, store_raw_json: bool) -> FileRecord:
     size_bytes, mtime_utc = path_signature(path)
     size = info.get("size") or [None, None]
@@ -338,6 +547,23 @@ def extract_record(path: Path, info: dict, store_raw_json: bool) -> FileRecord:
     wkt = coordinate_system.get("wkt")
     driver_short = info.get("driverShortName")
     driver_long = info.get("driverLongName")
+    pixel_width, pixel_height = pixel_size(info)
+    block_width, block_height = first_band_block(info)
+    bits = first_band_bits(info)
+    stats_min, stats_max, stats_mean, stats_stddev = first_band_stats(info)
+    compression = dataset_compression(info)
+    color_table = first_band_color_table(info)
+    category_names = first_band_category_names(info)
+    metadata_json = json.dumps(dataset_metadata(info), separators=(",", ":"))
+    band_metadata_json = json.dumps(band_metadata_list(info), separators=(",", ":"))
+    source_files = dataset_source_files(info)
+    overview_count = first_band_overview_count(info)
+    first_band = _first_band(info)
+    color_interp = (
+        str(first_band.get("colorInterpretation"))
+        if first_band and first_band.get("colorInterpretation") is not None
+        else None
+    )
     return FileRecord(
         path=str(path),
         size_bytes=size_bytes,
@@ -350,6 +576,23 @@ def extract_record(path: Path, info: dict, store_raw_json: bool) -> FileRecord:
         bands=len(bands) if bands else 0,
         dtype=first_band_type(info),
         nodata=first_band_nodata(info),
+        pixel_width=pixel_width,
+        pixel_height=pixel_height,
+        block_width=block_width,
+        block_height=block_height,
+        bits=bits,
+        stats_min=stats_min,
+        stats_max=stats_max,
+        stats_mean=stats_mean,
+        stats_stddev=stats_stddev,
+        compression=compression,
+        color_interp=color_interp,
+        color_table=color_table,
+        category_names=category_names,
+        metadata_json=metadata_json,
+        band_metadata_json=band_metadata_json,
+        source_files=source_files,
+        overview_count=overview_count,
         is_cog=is_cog(info),
         has_overviews=has_overviews(info),
         raw_json=json.dumps(info, separators=(",", ":")) if store_raw_json else None,
@@ -373,6 +616,23 @@ def error_record(path: Path, error: str) -> FileRecord:
         bands=None,
         dtype=None,
         nodata=None,
+        pixel_width=None,
+        pixel_height=None,
+        block_width=None,
+        block_height=None,
+        bits=None,
+        stats_min=None,
+        stats_max=None,
+        stats_mean=None,
+        stats_stddev=None,
+        compression=None,
+        color_interp=None,
+        color_table=None,
+        category_names=None,
+        metadata_json=None,
+        band_metadata_json=None,
+        source_files=None,
+        overview_count=None,
         is_cog=None,
         has_overviews=None,
         raw_json=None,
@@ -387,9 +647,19 @@ def upsert_record(conn: sqlite3.Connection, record: FileRecord) -> None:
         """
         INSERT INTO files (
             path, size_bytes, mtime_utc, format, driver, crs, width, height,
-            bands, dtype, nodata, is_cog, has_overviews, raw_json,
-            scan_status, error_message, scanned_at_utc
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            bands, dtype, nodata, pixel_width, pixel_height, block_width,
+            block_height, bits, stats_min, stats_max, stats_mean, stats_stddev,
+            compression, color_interp, color_table, category_names,
+            metadata_json, band_metadata_json, source_files, overview_count,
+            is_cog, has_overviews, raw_json, scan_status, error_message,
+            scanned_at_utc
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?
+        )
         ON CONFLICT(path) DO UPDATE SET
             size_bytes = excluded.size_bytes,
             mtime_utc = excluded.mtime_utc,
@@ -401,6 +671,23 @@ def upsert_record(conn: sqlite3.Connection, record: FileRecord) -> None:
             bands = excluded.bands,
             dtype = excluded.dtype,
             nodata = excluded.nodata,
+            pixel_width = excluded.pixel_width,
+            pixel_height = excluded.pixel_height,
+            block_width = excluded.block_width,
+            block_height = excluded.block_height,
+            bits = excluded.bits,
+            stats_min = excluded.stats_min,
+            stats_max = excluded.stats_max,
+            stats_mean = excluded.stats_mean,
+            stats_stddev = excluded.stats_stddev,
+            compression = excluded.compression,
+            color_interp = excluded.color_interp,
+            color_table = excluded.color_table,
+            category_names = excluded.category_names,
+            metadata_json = excluded.metadata_json,
+            band_metadata_json = excluded.band_metadata_json,
+            source_files = excluded.source_files,
+            overview_count = excluded.overview_count,
             is_cog = excluded.is_cog,
             has_overviews = excluded.has_overviews,
             raw_json = excluded.raw_json,
@@ -420,6 +707,23 @@ def upsert_record(conn: sqlite3.Connection, record: FileRecord) -> None:
             record.bands,
             record.dtype,
             record.nodata,
+            record.pixel_width,
+            record.pixel_height,
+            record.block_width,
+            record.block_height,
+            record.bits,
+            record.stats_min,
+            record.stats_max,
+            record.stats_mean,
+            record.stats_stddev,
+            record.compression,
+            record.color_interp,
+            record.color_table,
+            record.category_names,
+            record.metadata_json,
+            record.band_metadata_json,
+            record.source_files,
+            record.overview_count,
             record.is_cog,
             record.has_overviews,
             record.raw_json,
