@@ -40,13 +40,18 @@ Phase 1 only: inventory and metadata capture into SQLite.
 
 ## Validation
 
-For code changes, prefer running:
+For code changes, prefer running cli, library if needed:
 
 ```bash
+# cli tool:
+raster-repo --help
+
+# library:
+uv run python -m raster_inventory --help
 uv run python -m raster_inventory.inventory --help
 ```
 
-If a test suite is added later, run it before finishing.
+Run tests before finishing.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
