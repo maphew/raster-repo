@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import unittest
 from pathlib import Path
@@ -69,6 +70,27 @@ class RunGdalInfoPythonTests(unittest.TestCase):
             inventory.run_gdalinfo_python(Path("dummy.tif"))
 
         self.assertIn("could not open", str(exc.exception))
+
+
+class PackageMainTests(unittest.TestCase):
+    def test_package_main_delegates_to_inventory_main(self) -> None:
+        module = importlib.import_module("raster_inventory.__main__")
+
+        called: dict[str, object] = {}
+
+        def fake_main(argv):
+            called["argv"] = argv
+            return 7
+
+        original = module._inventory.main
+        module._inventory.main = fake_main
+        try:
+            result = module.main(["--flag"])
+        finally:
+            module._inventory.main = original
+
+        self.assertEqual(result, 7)
+        self.assertEqual(called["argv"], ["--flag"])
 
 
 if __name__ == "__main__":
