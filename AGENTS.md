@@ -51,7 +51,13 @@ uv run python -m raster_inventory --help
 uv run python -m raster_inventory.inventory --help
 ```
 
-Run tests before finishing.
+Run tests before finishing:
+
+```
+uv run pytest -v
+```
+
+`uv run coverage` is available also.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
