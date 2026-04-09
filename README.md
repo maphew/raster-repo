@@ -27,6 +27,9 @@ raster-repo/
     raster_inventory/
       __init__.py
       inventory.py
+      viewer.py
+    raster_repo/
+      __init__.py
 ```
 
 ## Prerequisites
@@ -53,6 +56,7 @@ uv tool install -e .
 
 # test
 raster-repo --help
+raster-repo view --help
 ```
 Run an inventory over one or more roots:
 
@@ -68,6 +72,15 @@ Show summary stats:
 raster-repo \
   --db inventory.sqlite \
   --summary
+```
+
+Browse existing inventory rows without rescanning:
+
+```bash
+raster-repo view \
+  --db inventory.sqlite \
+  --limit 30 \
+  --order mtime
 ```
 
 Rescan only files that are new or changed:

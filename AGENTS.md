@@ -28,6 +28,7 @@ Phase 1 only: inventory and metadata capture into SQLite.
 - Keep CLI flags explicit rather than clever.
 - Prefer standard library unless a small dependency materially improves clarity.
 - Preserve backward-compatible database migrations when possible.
+- Use red-green TDD whenever touching executable code: add (or update) a failing test, make it pass, then refactor if needed before moving on.
 
 ## Near-term roadmap
 
