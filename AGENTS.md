@@ -1,5 +1,23 @@
 # Project guidance for Agents
 
+## Table of contents
+
+- [Objective](#objective)
+- [Current phase](#current-phase)
+- [Constraints](#constraints)
+- [When editing code](#when-editing-code)
+- [Near-term roadmap](#near-term-roadmap)
+- [Validation](#validation)
+- [Beads Issue Tracker](#beads-issue-tracker)
+  - [Quick Reference](#quick-reference)
+  - [Rules](#rules)
+- [Session Completion](#session-completion)
+- [Project (swamp)](#project)
+  - [Rules](#rules-1)
+  - [Skills](#skills)
+  - [Getting Started](#getting-started)
+  - [Commands](#commands)
+
 ## Objective
 
 Help incrementally normalize a large, messy raster estate toward:
