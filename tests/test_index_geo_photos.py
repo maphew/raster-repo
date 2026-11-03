@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import subprocess
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pytest
 from osgeo import ogr, osr
@@ -75,6 +77,41 @@ def test_import_and_skip_existing(indexer, tmp_path, monkeypatch):
     assert output.read_bytes() == original
     assert len(calls) == 1
     assert sorted(p.name for p in tmp_path.iterdir()) == ['photo_locations.gpkg']
+    with sqlite3.connect(output) as db:
+        assert db.execute('SELECT useAsDefault FROM layer_styles').fetchone() == (1,)
+
+
+@pytest.mark.parametrize('folders', [[], ['Survey', 'Survey', 'Rock & "Ice"', "O'Brien"]])
+def test_default_style_categories_and_symbols(indexer, tmp_path, folders):
+    gpkg = tmp_path / 'photos.gpkg'
+    make_photos(gpkg, [tmp_path / folder / f'{i}.jpg' for i, folder in enumerate(folders)])
+    indexer.attribute_sources(gpkg)
+    indexer.style_sources(gpkg)
+    with sqlite3.connect(gpkg) as db:
+        table, geometry, default, qml = db.execute(
+            'SELECT f_table_name, f_geometry_column, useAsDefault, styleQML FROM layer_styles'
+        ).fetchone()
+        assert (table, geometry, default) == ('photo_locations', 'geom', 1)
+        assert db.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+        updated = db.execute('SELECT update_time FROM layer_styles').fetchone()[0]
+        assert 'T' in updated and updated.endswith('Z')
+    renderer = ET.fromstring(qml).find('renderer-v2')
+    assert renderer.get('type') == 'categorizedSymbol'
+    assert renderer.get('attr') == 'source_folder'
+    categories = renderer.findall('categories/category')
+    assert [c.get('value') for c in categories] == sorted(set(folders))
+    symbols = {s.get('name'): s for s in renderer.findall('symbols/symbol')}
+    for category in categories:
+        assert category.get('label') == category.get('value')
+        assert category.get('render') == 'true'
+        symbol = symbols[category.get('symbol')]
+        assert symbol.get('type') == 'marker'
+        assert symbol.find('layer').get('class') == 'SimpleMarker'
+        assert symbol.find(".//Option[@name='color']") is not None
+    with ogr.Open(str(gpkg)) as ds:
+        layer = ds.GetLayerByName('photo_locations')
+        assert layer.GetFeatureCount() == len(folders)
+        assert all(f.GetGeometryRef().GetPoint() == (-135, 61, 123) for f in layer)
 
 
 @pytest.mark.parametrize('failure', ['process', 'attributes', 'missing_output'])

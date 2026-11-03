@@ -5,13 +5,17 @@ _codex-gpt-6.1-sol- on behalf of Matt Wilkie_
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import fnmatch
 import os
 from pathlib import Path
+import random
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+from xml.etree import ElementTree as ET
 
 
 def match_folders(pattern: str, root: Path) -> list[Path]:
@@ -63,6 +67,52 @@ def attribute_sources(path: Path) -> None:
                 raise
 
 
+def style_sources(path: Path) -> None:
+    """Embed a default QGIS categorized point style in the staging GeoPackage.
+
+    _codex-gpt-6.1-sol- on behalf of Matt Wilkie_
+    """
+    with closing(sqlite3.connect(path)) as db, db:
+        table, geometry = db.execute(
+            'SELECT table_name, column_name FROM gpkg_geometry_columns'
+        ).fetchone()
+        quoted_table = '"' + table.replace('"', '""') + '"'
+        folders = [row[0] for row in db.execute(
+            f'SELECT DISTINCT source_folder FROM {quoted_table} ORDER BY source_folder'
+        )]
+        qml = ET.Element('qgis', version='3.40', styleCategories='Symbology')
+        renderer = ET.SubElement(qml, 'renderer-v2', type='categorizedSymbol', attr='source_folder')
+        categories = ET.SubElement(renderer, 'categories')
+        symbols = ET.SubElement(renderer, 'symbols')
+        for number, folder in enumerate(folders):
+            symbol_id = str(number)
+            ET.SubElement(categories, 'category', value=folder, label=folder,
+                          symbol=symbol_id, render='true', type='string')
+            symbol = ET.SubElement(symbols, 'symbol', name=symbol_id, type='marker', alpha='1')
+            layer = ET.SubElement(symbol, 'layer', {'class': 'SimpleMarker', 'enabled': '1'})
+            options = ET.SubElement(layer, 'Option', type='Map')
+            properties = {
+                'name': 'circle', 'size': '2', 'size_unit': 'MM',
+                'color': ','.join(str(random.randrange(40, 231)) for _ in range(3)) + ',255',
+                'outline_color': '50,50,50,255', 'outline_width': '0.2',
+                'outline_width_unit': 'MM',
+            }
+            for name, value in properties.items():
+                ET.SubElement(options, 'Option', name=name, value=value, type='QString')
+        db.execute('''CREATE TABLE layer_styles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            f_table_catalog TEXT, f_table_schema TEXT, f_table_name TEXT,
+            f_geometry_column TEXT, styleName TEXT, styleQML TEXT, styleSLD TEXT,
+            useAsDefault BOOLEAN, description TEXT, owner TEXT, ui TEXT,
+            update_time DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        )''')
+        db.execute('''INSERT INTO layer_styles
+            (f_table_catalog, f_table_schema, f_table_name, f_geometry_column,
+             styleName, styleQML, useAsDefault, description, owner)
+            VALUES ('', '', ?, ?, 'source_folder', ?, 1, 'Photos by source folder', '')''',
+                   (table, geometry, ET.tostring(qml, encoding='unicode')))
+
+
 def publish_index(source: Path, target: Path, *, overwrite: bool = False) -> None:
     """Publish atomically, replacing an existing index only when requested."""
     if overwrite:
@@ -91,6 +141,7 @@ def index_folder(folder: Path, *, overwrite: bool = False) -> bool:
         if not staging.is_file():
             raise RuntimeError(f'QGIS did not produce an index for {folder}')
         attribute_sources(staging)
+        style_sources(staging)
         publish_index(staging, output, overwrite=overwrite)
     return True
 
@@ -112,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f'{"Indexed" if indexed else "Skipping existing index"}: {folder}')
         print(f'Finished: checked {len(folders)} matching directories.')
         return 0
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+    except (OSError, RuntimeError, sqlite3.Error, subprocess.CalledProcessError) as exc:
         print(f'Photo indexing failed: {exc}', file=sys.stderr)
         return 1
 
