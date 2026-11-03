@@ -63,20 +63,22 @@ def attribute_sources(path: Path) -> None:
                 raise
 
 
-def publish_index(source: Path, target: Path) -> None:
-    """Publish atomically without replacing an index created by another process."""
-    if os.name == 'nt':
+def publish_index(source: Path, target: Path, *, overwrite: bool = False) -> None:
+    """Publish atomically, replacing an existing index only when requested."""
+    if overwrite:
+        source.replace(target)
+    elif os.name == 'nt':
         source.rename(target)
     else:
         os.link(source, target)
         source.unlink()
 
 
-def index_folder(folder: Path) -> bool:
-    """Return False for an existing index; never change source photos."""
+def index_folder(folder: Path, *, overwrite: bool = False) -> bool:
+    """Skip existing indexes unless requested; publish only after a successful build."""
     folder = folder.resolve()
     output = folder / 'photo_locations.gpkg'
-    if output.exists():
+    if output.exists() and not overwrite:
         return False
     with tempfile.TemporaryDirectory(prefix='.photo-index-', dir=folder) as temporary:
         staging = Path(temporary) / output.name
@@ -89,12 +91,14 @@ def index_folder(folder: Path) -> bool:
         if not staging.is_file():
             raise RuntimeError(f'QGIS did not produce an index for {folder}')
         attribute_sources(staging)
-        publish_index(staging, output)
+        publish_index(staging, output, overwrite=overwrite)
     return True
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--overwrite', '--force', action='store_true',
+                        help='Rebuild existing indexes; replace only after successful indexing')
     parser.add_argument('pattern', help="Directory path or immediate-subdirectory wildcard (e.g. '2024*' or '*')")
     args = parser.parse_args(argv)
     try:
@@ -104,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         for number, folder in enumerate(folders, 1):
             print(f'[{number}/{len(folders)}] Checking: {folder}', flush=True)
-            indexed = index_folder(folder)
+            indexed = index_folder(folder, overwrite=args.overwrite)
             print(f'{"Indexed" if indexed else "Skipping existing index"}: {folder}')
         print(f'Finished: checked {len(folders)} matching directories.')
         return 0

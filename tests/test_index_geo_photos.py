@@ -112,6 +112,50 @@ def test_publish_never_overwrites_existing(indexer, tmp_path):
     assert target.read_bytes() == b'original'
 
 
+def test_overwrite_existing_index(indexer, tmp_path, monkeypatch):
+    output = tmp_path / 'photo_locations.gpkg'
+    output.write_bytes(b'original')
+    def run(command, **kwargs):
+        assert output.read_bytes() == b'original'
+        staging = Path(next(arg.removeprefix('OUTPUT=') for arg in command if arg.startswith('OUTPUT=')))
+        make_photos(staging, [tmp_path / 'new' / 'a.jpg'])
+    monkeypatch.setattr(indexer.subprocess, 'run', run)
+    assert indexer.index_folder(tmp_path, overwrite=True) is True
+    with ogr.Open(str(output)) as ds:
+        feature = ds.GetLayer(0).GetNextFeature()
+        assert feature.GetField('source_folder') == 'new'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['photo_locations.gpkg']
+
+
+@pytest.mark.parametrize('failure', ['process', 'attributes', 'missing_output'])
+def test_overwrite_failure_preserves_existing_index(indexer, tmp_path, monkeypatch, failure):
+    output = tmp_path / 'photo_locations.gpkg'
+    output.write_bytes(b'original')
+    def run(command, **kwargs):
+        staging = Path(next(arg.removeprefix('OUTPUT=') for arg in command if arg.startswith('OUTPUT=')))
+        if failure == 'missing_output':
+            return
+        staging.write_bytes(b'incomplete')
+        if failure == 'process':
+            raise subprocess.CalledProcessError(1, command)
+    monkeypatch.setattr(indexer.subprocess, 'run', run)
+    with pytest.raises((subprocess.CalledProcessError, RuntimeError)):
+        indexer.index_folder(tmp_path, overwrite=True)
+    assert output.read_bytes() == b'original'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['photo_locations.gpkg']
+
+
+@pytest.mark.parametrize('flag', ['--overwrite', '--force'])
+def test_cli_overwrite_aliases(indexer, tmp_path, monkeypatch, flag):
+    calls = []
+    def index(folder, *, overwrite=False):
+        calls.append((folder, overwrite))
+        return True
+    monkeypatch.setattr(indexer, 'index_folder', index)
+    assert indexer.main([flag, str(tmp_path)]) == 0
+    assert calls == [(tmp_path, True)]
+
+
 def test_cli_help_no_matches_and_failure(indexer, tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         indexer.main(['--help'])
@@ -119,7 +163,7 @@ def test_cli_help_no_matches_and_failure(indexer, tmp_path, monkeypatch, capsys)
     monkeypatch.chdir(tmp_path)
     assert indexer.main(['nothing*']) == 0
     assert 'No directories match' in capsys.readouterr().out
-    def fail(folder):
+    def fail(folder, *, overwrite=False):
         raise FileNotFoundError('qgis_process not found')
     monkeypatch.setattr(indexer, 'index_folder', fail)
     assert indexer.main([str(tmp_path)]) == 1

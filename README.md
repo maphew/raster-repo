@@ -211,6 +211,7 @@ photos recursively using QGIS's `native:importphotos` algorithm. Requires
 uv run python scripts/index-geo-photos.py '2024*'
 uv run python scripts/index-geo-photos.py '\\server\share\photos'
 uv run python scripts/index-geo-photos.py '*'
+uv run python scripts/index-geo-photos.py --overwrite '\\server\share\photos'
 ```
 
 A literal directory processes that directory; otherwise the pattern matches
@@ -224,7 +225,9 @@ point layer. In addition to QGIS's photo/EXIF fields, each point has:
   with identical names. QGIS's `photo` field retains the full photo filename.
 
 Existing indexes are skipped unchanged, including indexes made by the old script
-that lack these fields. To rebuild one, move the old GeoPackage aside first.
+that lack these fields. To rebuild one, pass `--overwrite` (or `--force`).
+The existing index is replaced only after its replacement is successfully built;
+if import or attribution fails, the existing index is preserved.
 New indexes are published only after import and attribution succeed; temporary
 files are cleaned up on failure and the command exits nonzero. Source photos
 are never modified. No additional Python dependencies are introduced.
