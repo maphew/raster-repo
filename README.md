@@ -200,3 +200,31 @@ A system where:
 * raw legacy data becomes **managed assets**
 * processing is **repeatable and automatable**
 * the archive evolves from a “pile of files” into a **structured data platform**
+
+## Geotagged photo indexes
+
+The Python replacement for `scripts/index-geo-photos.ps1` imports geotagged
+photos recursively using QGIS's `native:importphotos` algorithm. Requires
+`qgis_process` on `PATH` and the project's GDAL Python bindings.
+
+```powershell
+uv run python scripts/index-geo-photos.py '2024*'
+uv run python scripts/index-geo-photos.py '\\server\share\photos'
+uv run python scripts/index-geo-photos.py '*'
+```
+
+A literal directory processes that directory; otherwise the pattern matches
+immediate subdirectory names of the current working directory, case-insensitively.
+Each selected directory gets a `photo_locations.gpkg` with a `photo_locations`
+point layer. In addition to QGIS's photo/EXIF fields, each point has:
+
+- `source_folder`: name of the directory directly containing the photo (including
+  nested directories), suitable for categorizing or grouping points.
+- `source_path`: absolute path of that containing directory; distinguishes folders
+  with identical names. QGIS's `photo` field retains the full photo filename.
+
+Existing indexes are skipped unchanged, including indexes made by the old script
+that lack these fields. To rebuild one, move the old GeoPackage aside first.
+New indexes are published only after import and attribution succeed; temporary
+files are cleaned up on failure and the command exits nonzero. Source photos
+are never modified. No additional Python dependencies are introduced.
