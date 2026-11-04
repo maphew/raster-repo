@@ -224,6 +224,25 @@ point layer. In addition to QGIS's photo/EXIF fields, each point has:
 - `source_path`: absolute path of that containing directory; distinguishes folders
   with identical names. QGIS's `photo` field retains the full photo filename.
 
+Additional EXIF fields are read using GDAL, without modifying photos:
+
+- Capture precision: `OffsetTimeOriginal`, `SubSecTimeOriginal` (text, preserving
+  the UTC offset and leading fractional-second zeros; no timezone is inferred).
+- Camera: `Make`, `Model`, `LensModel`.
+- Image: `ExifImageWidth`, `ExifImageHeight`, `Orientation` (integer EXIF codes).
+- Exposure: `ExposureTime` (seconds), `FNumber`, `ISO`, `FocalLength` (mm),
+  stored as numbers for filtering.
+- Location confidence: `GPSHPositioningError` (metres), `GPSDOP` (unitless),
+  `GPSMeasureMode` (`2` or `3`, stored as text).
+- Direction reference: `GPSImgDirectionRef` (`T` = true north, `M` = magnetic).
+- GPS time: `GPSDateStamp` and `GPSTimeStamp` (UTC; text in GDAL's EXIF format,
+  with time represented as `(hour) (minute) (second)`).
+
+Missing or invalid numeric tags remain NULL. Unreadable photos produce a warning
+and NULL EXIF values; QGIS's existing attributes and geometry are retained.
+Tag definitions: [EXIF](https://exiftool.org/TagNames/EXIF.html) and
+[GPS](https://exiftool.org/TagNames/GPS.html).
+
 Existing indexes are skipped unchanged, including indexes made by the old script
 that lack these fields. To rebuild one, pass `--overwrite` (or `--force`).
 The existing index is replaced only after its replacement is successfully built;

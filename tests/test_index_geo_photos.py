@@ -218,3 +218,105 @@ def test_resolves_qgis_command_shims(indexer, tmp_path, monkeypatch):
         make_photos(output, [])
     monkeypatch.setattr(indexer.subprocess, 'run', run)
     assert indexer.index_folder(tmp_path)
+
+
+def test_additional_exif_fields_from_real_jpeg(indexer, tmp_path):
+    from osgeo import gdal
+
+    photo = tmp_path / 'a.jpg'
+    metadata = {
+        'EXIF_OffsetTimeOriginal': '-07:00', 'EXIF_SubSecTime_Original': '001230',
+        'EXIF_Make': 'Example', 'EXIF_Model': 'Survey Camera', 'EXIF_LensModel': 'Wide 24',
+        'EXIF_PixelXDimension': '4000', 'EXIF_PixelYDimension': '3000',
+        'EXIF_Orientation': '6', 'EXIF_ExposureTime': '(0.008)', 'EXIF_FNumber': '(2.8)',
+        'EXIF_ISOSpeedRatings': '200', 'EXIF_FocalLength': '(24)',
+        'EXIF_GPSHPositioningError': '(3.5)', 'EXIF_GPSDOP': '(1.2)',
+        'EXIF_GPSMeasureMode': '3', 'EXIF_GPSImgDirectionRef': 'M',
+        'EXIF_GPSDateStamp': '2026:11:04', 'EXIF_GPSTimeStamp': '(12) (34) (56.125)',
+    }
+    with gdal.GetDriverByName('MEM').Create('', 2, 2, 3) as image:
+        image.SetMetadata(metadata)
+        with gdal.GetDriverByName('JPEG').CreateCopy(str(photo), image):
+            pass
+    original = photo.read_bytes()
+    gpkg = tmp_path / 'photos.gpkg'
+    make_photos(gpkg, [photo])
+    indexer.attribute_exif(gpkg)
+    expected = {
+        'OffsetTimeOriginal': '-07:00', 'SubSecTimeOriginal': '001230',
+        'Make': 'Example', 'Model': 'Survey Camera', 'LensModel': 'Wide 24',
+        'ExifImageWidth': 4000, 'ExifImageHeight': 3000, 'Orientation': 6,
+        'ExposureTime': 0.008, 'FNumber': 2.8, 'ISO': 200, 'FocalLength': 24,
+        'GPSHPositioningError': 3.5, 'GPSDOP': 1.2, 'GPSMeasureMode': '3',
+        'GPSImgDirectionRef': 'M', 'GPSDateStamp': '2026:11:04',
+        'GPSTimeStamp': '(12) (34) (56.125)',
+    }
+    with ogr.Open(str(gpkg)) as ds:
+        feature = ds.GetLayer(0).GetNextFeature()
+        for name, value in expected.items():
+            assert feature.GetField(name) == value, name
+        assert feature.GetGeometryRef().GetPoint() == (-135, 61, 123)
+    assert photo.read_bytes() == original
+
+
+def test_missing_and_invalid_exif_are_null(indexer, tmp_path, monkeypatch):
+    gpkg = tmp_path / 'photos.gpkg'
+    make_photos(gpkg, [tmp_path / 'a.jpg', tmp_path / 'b.jpg'])
+    monkeypatch.setattr(indexer, 'read_exif', lambda path: {
+        'EXIF_FNumber': '(not a number)', 'EXIF_ExposureTime': '(nan)',
+        'EXIF_ISOSpeedRatings': '100 200', 'EXIF_Orientation': '1.5',
+        'EXIF_GPSHPositioningError': '(0)',
+    } if path.name == 'a.jpg' else {})
+    indexer.attribute_exif(gpkg)
+    indexer.attribute_exif(gpkg)
+    with ogr.Open(str(gpkg)) as ds:
+        rows = list(ds.GetLayer(0))
+        for name in ['OffsetTimeOriginal', 'Model', 'GPSImgDirectionRef',
+                     'FNumber', 'ExposureTime', 'ISO', 'Orientation']:
+            assert all(row.GetField(name) is None for row in rows)
+        assert rows[0].GetField('GPSHPositioningError') == 0
+        assert rows[1].GetField('GPSHPositioningError') is None
+
+
+def test_index_enriches_exif_before_publication(indexer, tmp_path, monkeypatch):
+    def run(command, **kwargs):
+        output = Path(next(arg.removeprefix('OUTPUT=') for arg in command if arg.startswith('OUTPUT=')))
+        make_photos(output, [tmp_path / 'a.jpg'])
+    monkeypatch.setattr(indexer.subprocess, 'run', run)
+    monkeypatch.setattr(indexer, 'read_exif', lambda path: {'EXIF_Model': 'Camera'})
+    indexer.index_folder(tmp_path)
+    with ogr.Open(str(tmp_path / 'photo_locations.gpkg')) as ds:
+        assert ds.GetLayer(0).GetNextFeature().GetField('Model') == 'Camera'
+
+
+
+def test_unreadable_photo_warns_and_returns_no_metadata(indexer, tmp_path, capsys):
+    assert indexer.read_exif(tmp_path / 'missing.jpg') == {}
+    assert 'cannot read EXIF' in capsys.readouterr().err
+
+
+def test_exif_failure_preserves_existing_index(indexer, tmp_path, monkeypatch):
+    output = tmp_path / 'photo_locations.gpkg'
+    output.write_bytes(b'original')
+    def run(command, **kwargs):
+        staging = Path(next(arg.removeprefix('OUTPUT=') for arg in command if arg.startswith('OUTPUT=')))
+        make_photos(staging, [tmp_path / 'a.jpg'])
+    def fail(path):
+        raise RuntimeError('EXIF attribution failed')
+    monkeypatch.setattr(indexer.subprocess, 'run', run)
+    monkeypatch.setattr(indexer, 'attribute_exif', fail)
+    with pytest.raises(RuntimeError, match='EXIF attribution failed'):
+        indexer.index_folder(tmp_path, overwrite=True)
+    assert output.read_bytes() == b'original'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['photo_locations.gpkg']
+
+
+def test_empty_layer_gets_exif_schema(indexer, tmp_path):
+    gpkg = tmp_path / 'empty.gpkg'
+    make_photos(gpkg, [])
+    indexer.attribute_exif(gpkg)
+    with ogr.Open(str(gpkg)) as ds:
+        layer = ds.GetLayer(0)
+        assert layer.GetFeatureCount() == 0
+        assert all(layer.GetLayerDefn().GetFieldIndex(name) >= 0
+                   for name, _, _ in indexer.EXIF_FIELDS)

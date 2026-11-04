@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from contextlib import closing
 import fnmatch
+import math
 import os
 from pathlib import Path
 import random
@@ -65,6 +66,86 @@ def attribute_sources(path: Path) -> None:
             except BaseException:
                 layer.RollbackTransaction()
                 raise
+
+
+# Output name, GDAL EXIF tag suffix, storage type.
+# _codex-gpt-6.1-sol- on behalf of Matt Wilkie_
+EXIF_FIELDS = (
+    ('OffsetTimeOriginal', 'OffsetTimeOriginal', str),
+    ('SubSecTimeOriginal', 'SubSecTime_Original', str),
+    ('Make', 'Make', str), ('Model', 'Model', str), ('LensModel', 'LensModel', str),
+    ('ExifImageWidth', 'PixelXDimension', int),
+    ('ExifImageHeight', 'PixelYDimension', int), ('Orientation', 'Orientation', int),
+    ('ExposureTime', 'ExposureTime', float), ('FNumber', 'FNumber', float),
+    ('ISO', 'ISOSpeedRatings', int), ('FocalLength', 'FocalLength', float),
+    ('GPSHPositioningError', 'GPSHPositioningError', float),
+    ('GPSDOP', 'GPSDOP', float), ('GPSMeasureMode', 'GPSMeasureMode', str),
+    ('GPSImgDirectionRef', 'GPSImgDirectionRef', str),
+    ('GPSDateStamp', 'GPSDateStamp', str), ('GPSTimeStamp', 'GPSTimeStamp', str),
+)
+
+
+def read_exif(photo: Path) -> dict[str, str]:
+    """Read EXIF without pixel decoding or modifying the source photo.
+
+    _codex-gpt-6.1-sol- on behalf of Matt Wilkie_
+    """
+    from osgeo import gdal
+
+    with gdal.ExceptionMgr(), gdal.quiet_errors():
+        try:
+            with gdal.OpenEx(str(photo), gdal.OF_RASTER | gdal.OF_READONLY) as image:
+                return {**(image.GetMetadata() or {}), **(image.GetMetadata('EXIF') or {})}
+        except RuntimeError as exc:
+            print(f'Warning: cannot read EXIF for {photo}: {exc}', file=sys.stderr)
+            return {}
+
+
+def attribute_exif(path: Path) -> None:
+    """Add nullable EXIF attributes while preserving QGIS geometry and fields.
+
+    Keep offsets, fractional-second digits and GPS time as text; numeric
+    rationals are stored as numbers for filtering. Never infer absent tags.
+
+    _codex-gpt-6.1-sol- on behalf of Matt Wilkie_
+    """
+    from osgeo import ogr
+
+    types = {str: ogr.OFTString, int: ogr.OFTInteger64, float: ogr.OFTReal}
+    with ogr.ExceptionMgr(), ogr.Open(str(path), update=1) as ds:
+        if ds is None or ds.GetLayerCount() != 1:
+            raise RuntimeError(f'Expected one photo layer in {path}')
+        layer = ds.GetLayer(0)
+        if layer.GetLayerDefn().GetFieldIndex('photo') < 0:
+            raise RuntimeError(f'Missing photo attribute in {path}')
+        layer.StartTransaction()
+        try:
+            for name, _, kind in EXIF_FIELDS:
+                if layer.GetLayerDefn().GetFieldIndex(name) < 0:
+                    layer.CreateField(ogr.FieldDefn(name, types[kind]))
+            for feature in layer:
+                photo = feature.GetField('photo')
+                if not photo or not Path(photo).is_absolute():
+                    raise RuntimeError(f'Expected absolute photo path, got {photo!r}')
+                metadata = read_exif(Path(photo))
+                for name, tag, kind in EXIF_FIELDS:
+                    raw = metadata.get('EXIF_' + tag)
+                    feature.SetFieldNull(name)
+                    if raw is None or not raw.strip():
+                        continue
+                    try:
+                        value = raw if kind is str else kind(
+                            raw.strip().removeprefix('(').removesuffix(')'))
+                        if kind is float and not math.isfinite(value):
+                            continue
+                        feature.SetField(name, value)
+                    except (ValueError, OverflowError):
+                        continue
+                layer.SetFeature(feature)
+            layer.CommitTransaction()
+        except BaseException:
+            layer.RollbackTransaction()
+            raise
 
 
 def style_sources(path: Path) -> None:
@@ -141,6 +222,7 @@ def index_folder(folder: Path, *, overwrite: bool = False) -> bool:
         if not staging.is_file():
             raise RuntimeError(f'QGIS did not produce an index for {folder}')
         attribute_sources(staging)
+        attribute_exif(staging)
         style_sources(staging)
         publish_index(staging, output, overwrite=overwrite)
     return True
