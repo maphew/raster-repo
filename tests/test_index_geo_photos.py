@@ -320,3 +320,18 @@ def test_empty_layer_gets_exif_schema(indexer, tmp_path):
         assert layer.GetFeatureCount() == 0
         assert all(layer.GetLayerDefn().GetFieldIndex(name) >= 0
                    for name, _, _ in indexer.EXIF_FIELDS)
+
+
+def test_exif_read_has_no_numpy_import_diagnostic(tmp_path):
+    import sys
+
+    script = Path(__file__).parents[1] / 'scripts' / 'index-geo-photos.py'
+    code = (
+        'import runpy; from pathlib import Path; '
+        f'module = runpy.run_path({str(script)!r}); '
+        f'module["read_exif"](Path({str(tmp_path / "missing.jpg")!r}))'
+    )
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert 'ModuleNotFoundError' not in result.stderr
+    assert 'cannot read EXIF' in result.stderr

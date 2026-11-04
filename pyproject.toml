@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "gdal==3.12.1",
+    "numpy>=2.5.4",
 ]
 
 [[tool.uv.index]]

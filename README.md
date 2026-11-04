@@ -249,4 +249,5 @@ The existing index is replaced only after its replacement is successfully built;
 if import or attribution fails, the existing index is preserved.
 New indexes are published only after import and attribution succeed; temporary
 files are cleaned up on failure and the command exits nonzero. Source photos
-are never modified. No additional Python dependencies are introduced.
+  are never modified. NumPy is included for GDAL's Python exception-manager
+  integration; run `uv sync` after updating an existing environment.
